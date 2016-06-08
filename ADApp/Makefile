@@ -15,8 +15,8 @@ DIRS += tiffSupport
 DIRS += pluginSrc
 pluginSrc_DEPEND_DIRS += ADSrc netCDFSrc nexusSrc tiffSupport
 
-DIRS += pluginTests
-pluginTests_DEPEND_DIRS += ADSrc pluginSrc
+#DIRS += pluginTests
+#pluginTests_DEPEND_DIRS += ADSrc pluginSrc
 
 include $(TOP)/configure/RULES_DIRS
 

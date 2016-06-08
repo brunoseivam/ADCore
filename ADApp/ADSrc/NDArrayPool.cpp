@@ -6,637 +6,479 @@
  *
  */
 
-#include <stdlib.h>
+#include "NDArrayPool.h"
 
-#include <epicsExport.h>
+using namespace std;
+using namespace std::tr1;
+using namespace epics::pvData;
 
-#include "NDArray.h"
-
-static const char *driverName = "NDArrayPool";
-
-
-/** eraseNDAttributes is a global flag the controls whether NDArray::clearAttributes() is called
-  * each time a new array is allocated with NDArrayPool->alloc().
-  * The default value is 0, meaning that clearAttributes() is not called.  This mode is efficient
-  * because it saves lots of allocation/deallocation, and it is fine when the attributes for a driver
-  * are set once and not changed.  If driver attributes are deleted however, the allocated arrays
-  * will still have the old attributes if this flag is 0.  Set this flag to force attributes to be
-  * removed each time an NDArray is allocated.
-  */
-
-volatile int eraseNDAttributes=0;
-extern "C" {epicsExportAddress(int, eraseNDAttributes);}
-
-/** NDArrayPool constructor
-  * \param[in] maxBuffers Maximum number of NDArray objects that the pool is allowed to contain; 0=unlimited.
-  * \param[in] maxMemory Maxiumum number of bytes of memory the the pool is allowed to use, summed over
-  * all of the NDArray objects; 0=unlimited.
-  */
-NDArrayPool::NDArrayPool(int maxBuffers, size_t maxMemory)
-  : maxBuffers_(maxBuffers), numBuffers_(0), maxMemory_(maxMemory), memorySize_(0), numFree_(0)
+template <typename dataTypeIn, typename dataTypeOut>
+static int convertType(NDArrayPtr const & pIn, NDArrayPtr & pOut)
 {
-  ellInit(&freeList_);
-  listLock_ = epicsMutexCreate();
+    shared_vector<const dataTypeIn> pInData(pIn->viewData<dataTypeIn>());
+    shared_vector<dataTypeOut> pOutData(pOut->getData<dataTypeOut>());
+
+    for(size_t i = 0; i < pOutData.size(); ++i)
+        pOutData[i] = (dataTypeOut) pInData[i];
+
+    pOut->setData<dataTypeOut>(pOutData);
+    return 0;
 }
 
-/** Allocates a new NDArray object; the first 3 arguments are required.
-  * \param[in] ndims The number of dimensions in the NDArray. 
-  * \param[in] dims Array of dimensions, whose size must be at least ndims.
-  * \param[in] dataType Data type of the NDArray data.
-  * \param[in] dataSize Number of bytes to allocate for the array data; if 0 then
-  * alloc() will compute the size required from ndims, dims, and dataType.
-  * \param[in] pData Pointer to a data buffer; if NULL then alloc will allocate a new
-  * array buffer; if not NULL then it is assumed to point to a valid buffer.
-  * 
-  * If pData is not NULL then dataSize must contain the actual number of bytes in the existing
-  * array, and this array must be large enough to hold the array data. 
-  * alloc() searches
-  * its free list to find a free NDArray buffer. If is cannot find one then it will
-  * allocate a new one and add it to the free list. If doing so would exceed maxBuffers
-  * then alloc() will return an error. Similarly if allocating the memory required for
-  * this NDArray would cause the cumulative memory allocated for the pool to exceed
-  * maxMemory then an error will be returned. alloc() sets the reference count for the
-  * returned NDArray to 1.
-  */
-NDArray* NDArrayPool::alloc(int ndims, size_t *dims, NDDataType_t dataType, size_t dataSize, void *pData)
+template <typename dataTypeOut>
+static int convertType (NDArrayPtr const & pIn, NDArrayPtr & pOut)
 {
-  NDArray *pArray;
-  NDArrayInfo_t arrayInfo;
-  int i;
-  const char* functionName = "NDArrayPool::alloc:";
-
-  epicsMutexLock(listLock_);
-
-  /* Find a free image */
-  pArray = (NDArray *)ellFirst(&freeList_);
-
-  if (!pArray) {
-    /* We did not find a free image.
-     * Allocate a new one if we have not exceeded the limit */
-    if ((maxBuffers_ > 0) && (numBuffers_ >= maxBuffers_)) {
-      printf("%s: error: reached limit of %d buffers (memory use=%ld/%ld bytes)\n",
-             functionName, maxBuffers_, (long)memorySize_, (long)maxMemory_);
-    } else {
-      numBuffers_++;
-      pArray = new NDArray;
-      ellAdd(&freeList_, &pArray->node);
-      numFree_++;
-    }
+    switch(pIn->getDataType()) {
+    case pvBoolean: return convertType<boolean, dataTypeOut> (pIn, pOut);
+    case pvByte:    return convertType<int8,    dataTypeOut> (pIn, pOut);
+    case pvUByte:   return convertType<uint8,   dataTypeOut> (pIn, pOut);
+    case pvShort:   return convertType<int16,   dataTypeOut> (pIn, pOut);
+    case pvUShort:  return convertType<uint16,  dataTypeOut> (pIn, pOut);
+    case pvInt:     return convertType<int32,   dataTypeOut> (pIn, pOut);
+    case pvUInt:    return convertType<uint32,  dataTypeOut> (pIn, pOut);
+    case pvLong:    return convertType<int64,   dataTypeOut> (pIn, pOut);
+    case pvULong:   return convertType<uint64,  dataTypeOut> (pIn, pOut);
+    case pvFloat:   return convertType<float,   dataTypeOut> (pIn, pOut);
+    case pvDouble:  return convertType<double,  dataTypeOut> (pIn, pOut);
+    default:        return -1;
   }
+}
 
-  if (pArray) {
-    /* We have a frame */
-    /* Initialize fields */
-    pArray->pNDArrayPool = this;
-    pArray->dataType = dataType;
-    pArray->ndims = ndims;
-    memset(pArray->dims, 0, sizeof(pArray->dims));
-    for (i=0; i<ndims && i<ND_ARRAY_MAX_DIMS; i++) {
-      pArray->dims[i].size = dims[i];
-      pArray->dims[i].offset = 0;
-      pArray->dims[i].binning = 1;
-      pArray->dims[i].reverse = 0;
-    }
-    /* Erase the attributes if that global flag is set */
-    if (eraseNDAttributes) pArray->pAttributeList->clear();
-    pArray->getInfo(&arrayInfo);
-    if (dataSize == 0) dataSize = arrayInfo.totalBytes;
-    if (arrayInfo.totalBytes > dataSize) {
-      printf("%s: ERROR: required size=%d passed size=%d is too small\n",
-      functionName, (int)arrayInfo.totalBytes, (int)dataSize);
-      pArray=NULL;
-    }
-  }
+template <typename dataTypeIn, typename dataTypeOut>
+static void convertDimension (shared_vector<const dataTypeIn> const & inData,
+        vector<NDDimension_t> const & inDims,
+        shared_vector<dataTypeOut> & outData,
+        vector<NDDimension_t> const & outDims,
+        size_t dim)
+{
+    size_t inStep   = 1;
+    size_t outStep  = 1;
+    int inDir       = 1;
+    size_t inOffset = outDims[dim].offset;
 
-  if (pArray) {
-    /* If the caller passed a valid buffer use that, trust that its size is correct */
-    if (pData) {
-      pArray->pData = pData;
-    } else {
-      /* See if the current buffer is big enough */
-      if (pArray->dataSize < dataSize) {
-        /* No, we need to free the current buffer and allocate a new one */
-        /* See if there is enough room */
-        if (pArray->pData) {
-          memorySize_ -= pArray->dataSize;
-          free(pArray->pData);
-          pArray->pData = NULL;
-          pArray->dataSize = 0;
-        }
-        if ((maxMemory_ > 0) && ((memorySize_ + dataSize) > maxMemory_)) {
-          // We don't have enough memory to allocate the array
-          // See if we can get memory by deleting arrays
-          NDArray *freeArray = (NDArray *)ellFirst(&freeList_);
-          while (freeArray && ((memorySize_ + dataSize) > maxMemory_)) {
-            if (freeArray->pData) {
-              memorySize_ -= freeArray->dataSize;
-              free(freeArray->pData);
-              freeArray->pData = NULL;
-              freeArray->dataSize = 0;
+    for (size_t i = 0; i < dim; ++i) {
+        inStep  *= inDims[i].size;
+        outStep *= outDims[i].size;
+    }
+
+    if (outDims[dim].reverse) {
+        inOffset += outDims[dim].size * outDims[dim].binning - 1;
+        inDir     = -1;
+    }
+
+    int inc     = inDir * inStep;
+    size_t iIn  = inOffset*inStep;
+    size_t iOut = 0;
+
+    for (size_t i = 0; i < outDims[dim].size; ++i)
+    {
+        if(dim > 0)
+        {
+            for (int bin = 0; bin < outDims[dim].binning; ++bin)
+            {
+                shared_vector<const dataTypeIn> newInData(inData);
+                shared_vector<dataTypeOut> newOutData(outData);
+
+                newInData.slice(iIn);
+                newOutData.slice(iOut);
+
+                convertDimension <dataTypeIn, dataTypeOut> (newInData, inDims, newOutData, outDims, dim-1);
+                iIn += inc;
             }
-            // Next array
-            freeArray = (NDArray *)ellNext(&freeArray->node);
-          }
         }
-        if ((maxMemory_ > 0) && ((memorySize_ + dataSize) > maxMemory_)) {
-          printf("%s: error: reached limit of %ld memory (%d/%d buffers)\n",
-                 functionName, (long)maxMemory_, numBuffers_, maxBuffers_);
-          pArray = NULL;
-        } else {
-          pArray->pData = malloc(dataSize);
-          if (pArray->pData) {
-            pArray->dataSize = dataSize;
-            memorySize_ += dataSize;
-          } else {
-            pArray = NULL;
-          }
+        else
+        {
+            for (int bin = 0; bin < outDims[dim].binning; ++bin)
+            {
+                outData[iOut] += (dataTypeOut)inData[iIn];
+                iIn += inc;
+            }
         }
-      }
+
+        iOut += outStep;
     }
-    // If we don't have a valid memory buffer see pArray to NULL to indicate error
-    if (pArray && (pArray->pData == NULL)) pArray = NULL;
-  }
-  if (pArray) {
-    /* Set the reference count to 1, remove from free list */
-    pArray->referenceCount = 1;
-    ellDelete(&freeList_, &pArray->node);
-    numFree_--;
-  }
-  epicsMutexUnlock(listLock_);
-  return (pArray);
 }
 
-/** This method makes a copy of an NDArray object.
-  * \param[in] pIn The input array to be copied.
-  * \param[in] pOut The output array that will be copied to.
-  * \param[in] copyData If this flag is 1 then everything including the array data is copied;
-  * if 0 then everything except the data (including attributes) is copied.
-  * \return Returns a pointer to the output array.
-  *
-  * If pOut is NULL then it is first allocated. If the output array
-  * object already exists (pOut!=NULL) then it must have sufficient memory allocated to
-  * it to hold the data.
-  */
-NDArray* NDArrayPool::copy(NDArray *pIn, NDArray *pOut, int copyData)
+template <typename dataTypeIn, typename dataTypeOut>
+static int convertDimension (NDArrayPtr const & pIn, NDArrayPtr & pOut, size_t dim)
 {
-  //const char *functionName = "copy";
-  size_t dimSizeOut[ND_ARRAY_MAX_DIMS];
-  int i;
-  size_t numCopy;
-  NDArrayInfo arrayInfo;
+    shared_vector<const dataTypeIn> pInData(pIn->viewData<dataTypeIn>());
+    shared_vector<dataTypeOut> pOutData(pOut->getData<dataTypeOut>());
+    const vector<NDDimension_t> pInDims(pIn->getDimensions());
+    vector<NDDimension_t> pOutDims(pOut->getDimensions());
 
-  /* If the output array does not exist then create it */
-  if (!pOut) {
-    for (i=0; i<pIn->ndims; i++) dimSizeOut[i] = pIn->dims[i].size;
-    pOut = this->alloc(pIn->ndims, dimSizeOut, pIn->dataType, 0, NULL);
-    if(NULL==pOut) return NULL;
-  }
-  pOut->uniqueId = pIn->uniqueId;
-  pOut->timeStamp = pIn->timeStamp;
-  pOut->epicsTS = pIn->epicsTS;
-  pOut->ndims = pIn->ndims;
-  memcpy(pOut->dims, pIn->dims, sizeof(pIn->dims));
-  pOut->dataType = pIn->dataType;
-  if (copyData) {
-    pIn->getInfo(&arrayInfo);
-    numCopy = arrayInfo.totalBytes;
-    if (pOut->dataSize < numCopy) numCopy = pOut->dataSize;
-    memcpy(pOut->pData, pIn->pData, numCopy);
-  }
-  pOut->pAttributeList->clear();
-  pIn->pAttributeList->copy(pOut->pAttributeList);
-  return(pOut);
+    convertDimension<dataTypeIn, dataTypeOut>(pInData, pInDims, pOutData, pOutDims, dim);
+
+    pOut->setData(pOutData);
+    return 0;
 }
 
-/** This method increases the reference count for the NDArray object.
-  * \param[in] pArray The array on which to increase the reference count.
-  *
-  * Plugins must call reserve() when an NDArray is placed on a queue for later
-  * processing.
-  */
-int NDArrayPool::reserve(NDArray *pArray)
+template <typename dataTypeOut>
+static int convertDimension(NDArrayPtr const & pIn, NDArrayPtr & pOut, size_t dim)
 {
-  const char *functionName = "reserve";
-
-  /* Make sure we own this array */
-  if (pArray->pNDArrayPool != this) {
-    printf("%s:%s: ERROR, not owner!  owner=%p, should be this=%p\n",
-         driverName, functionName, pArray->pNDArrayPool, this);
-    return(ND_ERROR);
-  }
-  epicsMutexLock(listLock_);
-  pArray->referenceCount++;
-  epicsMutexUnlock(listLock_);
-  return ND_SUCCESS;
-}
-
-/** This method decreases the reference count for the NDArray object.
-  * \param[in] pArray The array on which to decrease the reference count.
-  *
-  * When the reference count reaches 0 the NDArray is placed back in the free list.
-  * Plugins must call release() when an NDArray is removed from the queue and
-  * processing on it is complete. Drivers must call release() after calling all
-  * plugins.
-  */
-int NDArrayPool::release(NDArray *pArray)
-{
-  const char *functionName = "release";
-
-  /* Make sure we own this array */
-  if (pArray->pNDArrayPool != this) {
-    printf("%s:%s: ERROR, not owner!  owner=%p, should be this=%p\n",
-           driverName, functionName, pArray->pNDArrayPool, this);
-    return(ND_ERROR);
-  }
-  epicsMutexLock(listLock_);
-  pArray->referenceCount--;
-  if (pArray->referenceCount == 0) {
-    /* The last user has released this image, add it back to the free list */
-    ellAdd(&freeList_, &pArray->node);
-    numFree_++;
-  }
-  if (pArray->referenceCount < 0) {
-    printf("%s:release ERROR, reference count < 0 pArray=%p\n",
-           driverName, pArray);
-  }
-  epicsMutexUnlock(listLock_);
-  return ND_SUCCESS;
-}
-
-template <typename dataTypeIn, typename dataTypeOut> void convertType(NDArray *pIn, NDArray *pOut)
-{
-  size_t i;
-  dataTypeIn *pDataIn = (dataTypeIn *)pIn->pData;
-  dataTypeOut *pDataOut = (dataTypeOut *)pOut->pData;
-  NDArrayInfo_t arrayInfo;
-
-  pOut->getInfo(&arrayInfo);
-  for (i=0; i<arrayInfo.nElements; i++) {
-    *pDataOut++ = (dataTypeOut)(*pDataIn++);
-  }
-}
-
-template <typename dataTypeOut> int convertTypeSwitch (NDArray *pIn, NDArray *pOut)
-{
-  int status = ND_SUCCESS;
-
-  switch(pIn->dataType) {
-    case NDInt8:
-      convertType<epicsInt8, dataTypeOut> (pIn, pOut);
-      break;
-    case NDUInt8:
-      convertType<epicsUInt8, dataTypeOut> (pIn, pOut);
-      break;
-    case NDInt16:
-      convertType<epicsInt16, dataTypeOut> (pIn, pOut);
-      break;
-    case NDUInt16:
-      convertType<epicsUInt16, dataTypeOut> (pIn, pOut);
-      break;
-    case NDInt32:
-      convertType<epicsInt32, dataTypeOut> (pIn, pOut);
-      break;
-    case NDUInt32:
-      convertType<epicsUInt32, dataTypeOut> (pIn, pOut);
-      break;
-    case NDFloat32:
-      convertType<epicsFloat32, dataTypeOut> (pIn, pOut);
-      break;
-    case NDFloat64:
-      convertType<epicsFloat64, dataTypeOut> (pIn, pOut);
-      break;
-    default:
-      status = ND_ERROR;
-      break;
-  }
-  return(status);
-}
-
-
-template <typename dataTypeIn, typename dataTypeOut> void convertDim(NDArray *pIn, NDArray *pOut,
-                                                     void *pDataIn, void *pDataOut, int dim)
-{
-  dataTypeOut *pDOut = (dataTypeOut *)pDataOut;
-  dataTypeIn *pDIn = (dataTypeIn *)pDataIn;
-  NDDimension_t *pOutDims = pOut->dims;
-  NDDimension_t *pInDims = pIn->dims;
-  size_t inStep, outStep, inOffset;
-  int inDir;
-  int i, bin;
-  size_t inc, in, out;
-
-  inStep = 1;
-  outStep = 1;
-  inDir = 1;
-  inOffset = pOutDims[dim].offset;
-  for (i=0; i<dim; i++) {
-    inStep  *= pInDims[i].size;
-    outStep *= pOutDims[i].size;
-  }
-  if (pOutDims[dim].reverse) {
-    inOffset += pOutDims[dim].size * pOutDims[dim].binning - 1;
-    inDir = -1;
-  }
-  inc = inDir * inStep;
-  pDIn += inOffset*inStep;
-  for (in=0, out=0; out<pOutDims[dim].size; out++, in++) {
-    for (bin=0; bin<pOutDims[dim].binning; bin++) {
-      if (dim > 0) {
-        convertDim <dataTypeIn, dataTypeOut> (pIn, pOut, pDIn, pDOut, dim-1);
-      } else {
-        *pDOut += (dataTypeOut)*pDIn;
-      }
-      pDIn += inc;
+    switch(pIn->getDataType()) {
+    case pvBoolean: return convertDimension <boolean, dataTypeOut> (pIn, pOut, dim);
+    case pvByte:    return convertDimension <int8,    dataTypeOut> (pIn, pOut, dim);
+    case pvUByte:   return convertDimension <uint8,   dataTypeOut> (pIn, pOut, dim);
+    case pvShort:   return convertDimension <int16,   dataTypeOut> (pIn, pOut, dim);
+    case pvUShort:  return convertDimension <int16,   dataTypeOut> (pIn, pOut, dim);
+    case pvInt:     return convertDimension <int32,   dataTypeOut> (pIn, pOut, dim);
+    case pvUInt:    return convertDimension <int32,   dataTypeOut> (pIn, pOut, dim);
+    case pvLong:    return convertDimension <int64,   dataTypeOut> (pIn, pOut, dim);
+    case pvULong:   return convertDimension <int64,   dataTypeOut> (pIn, pOut, dim);
+    case pvFloat:   return convertDimension <float,   dataTypeOut> (pIn, pOut, dim);
+    case pvDouble:  return convertDimension <double,  dataTypeOut> (pIn, pOut, dim);
+    default:        return -1;
     }
-    pDOut += outStep;
-  }
 }
 
-template <typename dataTypeOut> int convertDimensionSwitch(NDArray *pIn, NDArray *pOut,
-                                                           void *pDataIn, void *pDataOut, int dim)
+static int convertDimension(NDArrayPtr const & pIn, NDArrayPtr & pOut, size_t dim)
 {
-  int status = ND_SUCCESS;
-
-  switch(pIn->dataType) {
-    case NDInt8:
-      convertDim <epicsInt8, dataTypeOut> (pIn, pOut, pDataIn, pDataOut, dim);
-      break;
-    case NDUInt8:
-      convertDim <epicsUInt8, dataTypeOut> (pIn, pOut, pDataIn, pDataOut, dim);
-      break;
-    case NDInt16:
-      convertDim <epicsInt16, dataTypeOut> (pIn, pOut, pDataIn, pDataOut, dim);
-      break;
-    case NDUInt16:
-      convertDim <epicsUInt16, dataTypeOut> (pIn, pOut, pDataIn, pDataOut, dim);
-      break;
-    case NDInt32:
-      convertDim <epicsInt32, dataTypeOut> (pIn, pOut, pDataIn, pDataOut, dim);
-      break;
-    case NDUInt32:
-      convertDim <epicsUInt32, dataTypeOut> (pIn, pOut, pDataIn, pDataOut, dim);
-      break;
-    case NDFloat32:
-      convertDim <epicsFloat32, dataTypeOut> (pIn, pOut, pDataIn, pDataOut, dim);
-      break;
-    case NDFloat64:
-      convertDim <epicsFloat64, dataTypeOut> (pIn, pOut, pDataIn, pDataOut, dim);
-      break;
-    default:
-      status = ND_ERROR;
-      break;
-  }
-  return(status);
-}
-
-static int convertDimension(NDArray *pIn,
-                            NDArray *pOut,
-                            void *pDataIn,
-                            void *pDataOut,
-                            int dim)
-{
-  int status = ND_SUCCESS;
-  /* This routine is passed:
-   * A pointer to the start of the input data
-   * A pointer to the start of the output data
-   * An array of dimensions
-   * A dimension index */
-  switch(pOut->dataType) {
-    case NDInt8:
-      convertDimensionSwitch <epicsInt8>(pIn, pOut, pDataIn, pDataOut, dim);
-      break;
-    case NDUInt8:
-      convertDimensionSwitch <epicsUInt8> (pIn, pOut, pDataIn, pDataOut, dim);
-      break;
-    case NDInt16:
-      convertDimensionSwitch <epicsInt16> (pIn, pOut, pDataIn, pDataOut, dim);
-      break;
-    case NDUInt16:
-      convertDimensionSwitch <epicsUInt16> (pIn, pOut, pDataIn, pDataOut, dim);
-      break;
-    case NDInt32:
-      convertDimensionSwitch <epicsInt32> (pIn, pOut, pDataIn, pDataOut, dim);
-      break;
-    case NDUInt32:
-      convertDimensionSwitch <epicsUInt32> (pIn, pOut, pDataIn, pDataOut, dim);
-      break;
-    case NDFloat32:
-      convertDimensionSwitch <epicsFloat32> (pIn, pOut, pDataIn, pDataOut, dim);
-      break;
-    case NDFloat64:
-      convertDimensionSwitch <epicsFloat64> (pIn, pOut, pDataIn, pDataOut, dim);
-      break;
-    default:
-      status = ND_ERROR;
-      break;
-  }
-  return(status);
-}
-
-/** Creates a new output NDArray from an input NDArray, performing
-  * conversion operations.
-  * This form of the function is for changing the data type only, not the dimensions,
-  * which are preserved. 
-  * \param[in] pIn The input array, source of the conversion.
-  * \param[out] ppOut The output array, result of the conversion.
-  * \param[in] dataTypeOut The data type of the output array.
-  */
-int NDArrayPool::convert(NDArray *pIn,
-                         NDArray **ppOut,
-                         NDDataType_t dataTypeOut)
-                         
-{
-  NDDimension_t dims[ND_ARRAY_MAX_DIMS];
-  int i;
-  
-  for (i=0; i<pIn->ndims; i++) {
-    dims[i].size  = pIn->dims[i].size;
-    dims[i].offset  = 0;
-    dims[i].binning = 1;
-    dims[i].reverse = 0;
-  }
-  return this->convert(pIn, ppOut, dataTypeOut, dims);
-}             
-
-/** Creates a new output NDArray from an input NDArray, performing
-  * conversion operations.
-  * The conversion can change the data type if dataTypeOut is different from
-  * pIn->dataType. It can also change the dimensions. outDims may have different
-  * values of size, binning, offset and reverse for each of its dimensions from input
-  * array dimensions (pIn->dims).
-  * \param[in] pIn The input array, source of the conversion.
-  * \param[out] ppOut The output array, result of the conversion.
-  * \param[in] dataTypeOut The data type of the output array.
-  * \param[in] dimsOut The dimensions of the output array.
-  */
-int NDArrayPool::convert(NDArray *pIn,
-                         NDArray **ppOut,
-                         NDDataType_t dataTypeOut,
-                         NDDimension_t *dimsOut)
-{
-  int dimsUnchanged;
-  size_t dimSizeOut[ND_ARRAY_MAX_DIMS];
-  NDDimension_t dimsOutCopy[ND_ARRAY_MAX_DIMS];
-  int i;
-  NDArray *pOut;
-  NDArrayInfo_t arrayInfo;
-  NDAttribute *pAttribute;
-  int colorMode, colorModeMono = NDColorModeMono;
-  const char *functionName = "convert";
-
-  /* Initialize failure */
-  *ppOut = NULL;
-
-  /* Copy the input dimension array because we need to modify it
-   * but don't want to affect caller */
-  memcpy(dimsOutCopy, dimsOut, pIn->ndims*sizeof(NDDimension_t));
-  /* Compute the dimensions of the output array */
-  dimsUnchanged = 1;
-  for (i=0; i<pIn->ndims; i++) {
-    dimsOutCopy[i].size = dimsOutCopy[i].size/dimsOutCopy[i].binning;
-    if (dimsOutCopy[i].size <= 0) {
-      printf("%s:%s: ERROR, invalid output dimension, size=%d, binning=%d\n",
-             driverName, functionName, (int)dimsOut[i].size, dimsOut[i].binning);
-      return(ND_ERROR);
+    /* This routine is passed:
+     * A reference to the input array
+     * A reference to the output array
+     * A dimension index */
+    switch(pOut->getDataType()) {
+    case pvBoolean: return convertDimension <boolean> (pIn, pOut, dim);
+    case pvByte:    return convertDimension <int8>    (pIn, pOut, dim);
+    case pvUByte:   return convertDimension <uint8>   (pIn, pOut, dim);
+    case pvShort:   return convertDimension <int16>   (pIn, pOut, dim);
+    case pvUShort:  return convertDimension <uint16>  (pIn, pOut, dim);
+    case pvInt:     return convertDimension <int32>   (pIn, pOut, dim);
+    case pvUInt:    return convertDimension <uint32>  (pIn, pOut, dim);
+    case pvLong:    return convertDimension <int64>   (pIn, pOut, dim);
+    case pvULong:   return convertDimension <uint64>  (pIn, pOut, dim);
+    case pvFloat:   return convertDimension <float>   (pIn, pOut, dim);
+    case pvDouble:  return convertDimension <double>  (pIn, pOut, dim);
+    default:        return -1;
     }
-    dimSizeOut[i] = dimsOutCopy[i].size;
-    if ((pIn->dims[i].size  != dimsOutCopy[i].size) ||
-      (dimsOutCopy[i].offset != 0) ||
-      (dimsOutCopy[i].binning != 1) ||
-      (dimsOutCopy[i].reverse != 0)) dimsUnchanged = 0;
-  }
+}
 
-  /* We now know the datatype and dimensions of the output array.
-   * Allocate it */
-  pOut = alloc(pIn->ndims, dimSizeOut, dataTypeOut, 0, NULL);
-  *ppOut = pOut;
-  if (!pOut) {
-    printf("%s:%s: ERROR, cannot allocate output array\n",
-           driverName, functionName);
-    return(ND_ERROR);
-  }
-  /* Copy fields from input to output */
-  pOut->timeStamp = pIn->timeStamp;
-  pOut->epicsTS = pIn->epicsTS;
-  pOut->uniqueId = pIn->uniqueId;
-  /* Replace the dimensions with those passed to this function */
-  memcpy(pOut->dims, dimsOutCopy, pIn->ndims*sizeof(NDDimension_t));
-  pIn->pAttributeList->copy(pOut->pAttributeList);
+class NDArrayPoolDeleter
+{
+private:
+    NDArrayPool * mPool;
+public:
+    NDArrayPoolDeleter (NDArrayPool * pool) : mPool(pool) {};
+    void operator()(NDArray *array) { mPool->giveBack(array); }
+};
 
-  pOut->getInfo(&arrayInfo);
+void NDArrayPool::giveBack (NDArray *array)
+{
+    Lock lock(mMutex);
+    mPool.push_back(shared_ptr<NDArray>(array, NDArrayPoolDeleter(this)));
+}
 
-  if (dimsUnchanged) {
-    if (pIn->dataType == pOut->dataType) {
-      /* The dimensions are the same and the data type is the same,
-       * then just copy the input image to the output image */
-      memcpy(pOut->pData, pIn->pData, arrayInfo.totalBytes);
-      return ND_SUCCESS;
-    } else {
-      /* We need to convert data types */
-      switch(pOut->dataType) {
-        case NDInt8:
-          convertTypeSwitch <epicsInt8> (pIn, pOut);
-          break;
-        case NDUInt8:
-          convertTypeSwitch <epicsUInt8> (pIn, pOut);
-          break;
-        case NDInt16:
-          convertTypeSwitch <epicsInt16> (pIn, pOut);
-          break;
-        case NDUInt16:
-          convertTypeSwitch <epicsUInt16> (pIn, pOut);
-          break;
-        case NDInt32:
-          convertTypeSwitch <epicsInt32> (pIn, pOut);
-          break;
-        case NDUInt32:
-          convertTypeSwitch <epicsUInt32> (pIn, pOut);
-          break;
-        case NDFloat32:
-          convertTypeSwitch <epicsFloat32> (pIn, pOut);
-          break;
-        case NDFloat64:
-          convertTypeSwitch <epicsFloat64> (pIn, pOut);
-          break;
-        default:
-          //status = ND_ERROR;
-          break;
-      }
+size_t NDArrayPool::freeMemory (void)
+{
+    return 0;
+}
+
+NDArrayPool::NDArrayPool (size_t maxBuffers, size_t maxMemory):
+        mPool(), mMutex(), mMaxBuffers(maxBuffers), mMaxMemory(maxMemory),
+        mNumBuffers(0), mMemorySize(0)
+{}
+
+NDArrayPtr NDArrayPool::alloc (int ndims, size_t *dims, ScalarType dataType, size_t dataSize,
+        void *pData)
+{
+    vector<NDDimension_t> dimensions(ndims);
+    vector<NDDimension_t>::iterator it;
+
+    for(int i = 0; i < ndims; ++i)
+    {
+        dimensions[i].size    = dims[i];
+        dimensions[i].offset  = 0;
+        dimensions[i].binning = 1;
+        dimensions[i].reverse = false;
     }
-  } else {
-    /* The input and output dimensions are not the same, so we are extracting a region
-     * and/or binning */
-    /* Clear entire output array */
-    memset(pOut->pData, 0, arrayInfo.totalBytes);
-    convertDimension(pIn, pOut, pIn->pData, pOut->pData, pIn->ndims-1);
-  }
 
-  /* Set fields in the output array */
-  for (i=0; i<pIn->ndims; i++) {
-    pOut->dims[i].offset = pIn->dims[i].offset + dimsOutCopy[i].offset;
-    pOut->dims[i].binning = pIn->dims[i].binning * dimsOutCopy[i].binning;
-    if (pIn->dims[i].reverse) pOut->dims[i].reverse = !pOut->dims[i].reverse;
-  }
-
-  /* If the frame is an RGBx frame and we have collapsed that dimension then change the colorMode */
-  pAttribute = pOut->pAttributeList->find("ColorMode");
-  if (pAttribute && pAttribute->getValue(NDAttrInt32, &colorMode)) {
-    if      ((colorMode == NDColorModeRGB1) && (pOut->dims[0].size != 3)) 
-      pAttribute->setValue(&colorModeMono);
-    else if ((colorMode == NDColorModeRGB2) && (pOut->dims[1].size != 3)) 
-      pAttribute->setValue(&colorModeMono);
-    else if ((colorMode == NDColorModeRGB3) && (pOut->dims[2].size != 3))
-      pAttribute->setValue(&colorModeMono);
-  }
-  return ND_SUCCESS;
+    return alloc(dimensions, dataType, dataSize, pData);
 }
 
-/** Returns maximum number of buffers this object is allowed to allocate; 0=unlimited */
-int NDArrayPool::maxBuffers()
-{  
-return maxBuffers_;
-}
-
-/** Returns number of buffers this object has currently allocated */
-int NDArrayPool::numBuffers()
-{  
-return numBuffers_;
-}
-
-/** Returns maximum bytes of memory this object is allowed to allocate; 0=unlimited */
-size_t NDArrayPool::maxMemory()
-{  
-return maxMemory_;
-}
-
-/** Returns mumber of bytes of memory this object has currently allocated */
-size_t NDArrayPool::memorySize()
+NDArrayPtr NDArrayPool::alloc (vector<NDDimension_t> const & dims, ScalarType dataType,
+                  size_t dataSize, void *pData)
 {
-  return memorySize_;
+    NDArrayPtr nullArray;
+    switch(dataType)
+    {
+    case pvBoolean: return alloc<boolean>(dims, dataSize, pData);
+    case pvByte:    return alloc<int8>   (dims, dataSize, pData);
+    case pvUByte:   return alloc<uint8>  (dims, dataSize, pData);
+    case pvShort:   return alloc<int16>  (dims, dataSize, pData);
+    case pvUShort:  return alloc<uint16> (dims, dataSize, pData);
+    case pvInt:     return alloc<int32>  (dims, dataSize, pData);
+    case pvUInt:    return alloc<uint32> (dims, dataSize, pData);
+    case pvLong:    return alloc<int64>  (dims, dataSize, pData);
+    case pvULong:   return alloc<uint64> (dims, dataSize, pData);
+    case pvFloat:   return alloc<float>  (dims, dataSize, pData);
+    case pvDouble:  return alloc<double> (dims, dataSize, pData);
+    default:        return nullArray;
+    }
 }
 
-/** Returns number of NDArray objects in the free list */
-int NDArrayPool::numFree()
+template<typename valueType>
+NDArrayPtr NDArrayPool::alloc (vector<NDDimension_t> const & dims, size_t dataSize,
+        void *pData)
 {
-  return numFree_;
+    const char *driverName = "NDArrayPool";
+    const char *functionName = "alloc";
+
+    typedef typename PVValueArray<valueType>::shared_pointer arrayTypePtr;
+
+    NDArrayPtr nullArray, pArray;
+
+    Lock lock(mMutex);
+
+    if(!mPool.empty()) // Get last array from pool
+    {
+        pArray = mPool.back();
+        mPool.pop_back();
+    }
+    else // No array in the pool, create one
+    {
+        if (mMaxBuffers && mNumBuffers >= mMaxBuffers)
+        {
+            fprintf(stderr, "%s::%s: error: reached limit of %lu buffers (memory use=%lu/%lu bytes)\n",
+                    driverName, functionName, mMaxBuffers, mMemorySize, mMaxMemory);
+            return nullArray;
+        }
+
+        pArray = shared_ptr<NDArray>(new NDArray(), NDArrayPoolDeleter(this));
+
+        if(!pArray.get())
+        {
+            fprintf(stderr, "%s::%s: error: failed to allocate buffer\n",
+                    driverName, functionName);
+            return nullArray;
+        }
+
+        ++mNumBuffers;
+    }
+
+    pArray->setDimensions(dims);
+
+    /*if(eraseNTNDAttributes)
+        pArray->eraseAttributes();*/
+
+    // Calculate number of elements and total needed size
+    size_t elementSize = sizeof(valueType);
+    size_t nElements   = 1;
+
+    vector<NDDimension_t>::const_iterator it;
+    for(it = dims.begin(); it != dims.end(); ++it)
+        nElements *= (*it).size;
+
+    size_t totalBytes = nElements*elementSize;
+
+    // Check dataSize
+    if(!dataSize)
+        dataSize = totalBytes;
+    else if(totalBytes > dataSize)
+    {
+        fprintf(stderr, "%s::%s: ERROR: required size=%lu passed size=%lu is too small\n",
+                driverName, functionName, totalBytes, dataSize);
+        return nullArray;
+    }
+
+    // If the caller passed a valid buffer use that, trust that its size is correct
+    string unionField(string(ScalarTypeFunc::name(PVValueArray<valueType>::typeCode)) + string("Value"));
+    arrayTypePtr value(pArray->mArray->getValue()->select< PVValueArray<valueType> >(unionField));
+
+    if(pData)
+    {
+        // Assume pData was allocated with malloc (hence, use free for deallocation)
+        shared_vector<valueType> temp((valueType*)pData, free, 0, nElements);
+        value->replace(freeze(temp));
+    }
+    else
+    {
+        size_t prevSize = value->getLength()*elementSize;
+        if(prevSize < dataSize)
+        {
+            // Check if we will exceed allowed memory
+            if(mMaxMemory && mMemorySize + dataSize - prevSize > mMaxMemory)
+            {
+                size_t freed = freeMemory();
+                if(freed < dataSize - prevSize)
+                {
+                    fprintf(stderr, "%s::%s: ERROR: no memory available\n",
+                            driverName, functionName);
+                    return nullArray;
+                }
+            }
+
+            value->setLength(nElements);
+            mMemorySize += dataSize - prevSize;
+        }
+    }
+
+    return pArray;
 }
 
-/** Reports on the free list size and other properties of the NDArrayPool
-  * object.
-  * \param[in] fp File pointer for the report output.
-  * \param[in] details Level of report details desired; does nothing at present.
-  */
-int NDArrayPool::report(FILE *fp, int details)
+size_t NDArrayPool::maxBuffers (void) const
 {
-  fprintf(fp, "\n");
-  fprintf(fp, "NDArrayPool:\n");
-  fprintf(fp, "  numBuffers=%d, maxBuffers=%d\n",
-         numBuffers_, maxBuffers_);
-  fprintf(fp, "  memorySize=%ld, maxMemory=%ld\n",
-        (long)memorySize_, (long)maxMemory_);
-  fprintf(fp, "  numFree=%d\n",
-         numFree_);
-      
-  return ND_SUCCESS;
+    return mMaxBuffers;
 }
 
+size_t NDArrayPool::maxMemory (void) const
+{
+    return mMaxMemory;
+}
+
+size_t NDArrayPool::numBuffers (void) const
+{
+    return mNumBuffers;
+}
+
+size_t NDArrayPool::memorySize (void) const
+{
+    return mMemorySize;
+}
+
+size_t NDArrayPool::numFree (void) const
+{
+    return mPool.size();
+}
+
+
+void NDArrayPool::report (FILE *fp, int details)
+{
+    fprintf(fp, "\n");
+    fprintf(fp, "NDArrayPool:\n");
+    fprintf(fp, "  numBuffers=lu, maxBuffers=lu\n", numBuffers(), maxBuffers());
+    fprintf(fp, "  memorySize=%lu, maxMemory=%lu\n", memorySize(), maxMemory());
+    fprintf(fp, "  numFree=%lu\n", numFree());
+}
+
+NDArrayPtr NDArrayPool::convert (NDArrayPtr & in, ScalarType dataTypeOut)
+{
+    vector<NDDimension_t> dimsOut(in->getDimensions());
+    vector<NDDimension_t>::iterator it;
+
+    for(it = dimsOut.begin(); it != dimsOut.end(); ++it)
+    {
+        (*it).offset  = 0;
+        (*it).binning = 1;
+        (*it).reverse = false;
+    }
+
+    return convert(in, dataTypeOut, dimsOut);
+}
+
+NDArrayPtr NDArrayPool::convert (NDArrayPtr & pIn, ScalarType dataTypeOut,
+        vector<NDDimension_t> dimsOut)
+{
+    int colorMode, colorModeMono = NDColorModeMono;
+    const char *functionName = "convert";
+
+    vector<NDDimension_t> dimsIn(pIn->getDimensions());
+
+    // Compute the dimensions of the output array
+    bool dimsUnchanged = true;
+    for (size_t i = 0; i < dimsOut.size(); ++i)
+    {
+        dimsOut[i].size = dimsOut[i].size / dimsOut[i].binning;
+
+        if(dimsOut[i].size    != dimsIn[i].size ||
+           dimsOut[i].offset  != 0 ||
+           dimsOut[i].binning != 1 ||
+           dimsOut[i].reverse)
+            dimsUnchanged = false;
+    }
+
+    // We know the datatype and dimensions of the output array. Allocate it.
+    NDArrayPtr pOut(alloc(dimsOut, dataTypeOut));
+
+    // Check if allocation failed
+    if(!pOut)
+        return pOut;
+
+    // Copy fields from input to output
+    pOut->setTimeStamp(pIn->getTimeStamp());
+    //pOut->setEpicsTimeStamp(pIn->getEpicsTimeStamp());
+    pOut->setUniqueId(pIn->getUniqueId());
+
+    // Replace the dimensions with those passed to this function
+    pOut->setDimensions(dimsOut);
+
+    // Copy attributes
+    //pIn->pAttributeList->copy(pOut->pAttributeList);
+
+    if (dimsUnchanged)
+    {
+        if (pIn->getDataType() == pOut->getDataType())
+        {
+            /* The dimensions are the same and the data type is the same,
+             * then just copy the input image to the output image */
+            switch(pOut->getDataType())
+            {
+            case pvBoolean: pOut->setData<boolean> (pIn->viewData<boolean>()); break;
+            case pvByte:    pOut->setData<int8>    (pIn->viewData<int8>());    break;
+            case pvUByte:   pOut->setData<uint8>   (pIn->viewData<uint8>());   break;
+            case pvShort:   pOut->setData<int16>   (pIn->viewData<int16>());   break;
+            case pvUShort:  pOut->setData<uint16>  (pIn->viewData<uint16>());  break;
+            case pvInt:     pOut->setData<int32>   (pIn->viewData<int32>());   break;
+            case pvUInt:    pOut->setData<uint32>  (pIn->viewData<uint32>());  break;
+            case pvLong:    pOut->setData<int64>   (pIn->viewData<int64>());   break;
+            case pvULong:   pOut->setData<uint64>  (pIn->viewData<uint64>());  break;
+            case pvFloat:   pOut->setData<float>   (pIn->viewData<float>());   break;
+            case pvDouble:  pOut->setData<double>  (pIn->viewData<double>());  break;
+            default:
+                //status = ND_ERROR;
+                pOut.reset();
+            }
+
+            return pOut;
+        }
+        else
+        {
+            // We need to convert data types
+            switch(pOut->getDataType())
+            {
+            case pvBoolean: convertType <boolean> (pIn, pOut); break;
+            case pvByte:    convertType <int8>    (pIn, pOut); break;
+            case pvUByte:   convertType <uint8>   (pIn, pOut); break;
+            case pvShort:   convertType <int16>   (pIn, pOut); break;
+            case pvUShort:  convertType <uint16>  (pIn, pOut); break;
+            case pvInt:     convertType <int32>   (pIn, pOut); break;
+            case pvUInt:    convertType <uint32>  (pIn, pOut); break;
+            case pvLong:    convertType <int64>   (pIn, pOut); break;
+            case pvULong:   convertType <uint64>  (pIn, pOut); break;
+            case pvFloat:   convertType <float>   (pIn, pOut); break;
+            case pvDouble:  convertType <double>  (pIn, pOut); break;
+            default:
+                //status = ND_ERROR;
+                pOut.reset();
+                return pOut;
+            }
+        }
+    }
+    else
+    {
+        /* The input and output dimensions are not the same, so we are extracting a region
+        * and/or binning */
+        // Clear entire output array
+        pOut->zeroData();
+        convertDimension(pIn, pOut, dimsIn.size()-1);
+    }
+
+    /* Set fields in the output array *
+    for (size_t i = 0; i < dimsOut.size(); ++i) {
+              pOut->dims[i].offset = pIn->dims[i].offset + dimsOutCopy[i].offset;
+      pOut->dims[i].binning = pIn->dims[i].binning * dimsOutCopy[i].binning;
+      if (pIn->dims[i].reverse) pOut->dims[i].reverse = !pOut->dims[i].reverse;
+    }*/
+
+    /* If the frame is an RGBx frame and we have collapsed that dimension then change the colorMode *
+    NDAttribute *pAttribute = pOut->pAttributeList->find("ColorMode");
+    if (pAttribute && pAttribute->getValue(NDAttrInt32, &colorMode)) {
+      if      ((colorMode == NDColorModeRGB1) && (pOut->dims[0].size != 3))
+        pAttribute->setValue(&colorModeMono);
+      else if ((colorMode == NDColorModeRGB2) && (pOut->dims[1].size != 3))
+        pAttribute->setValue(&colorModeMono);
+      else if ((colorMode == NDColorModeRGB3) && (pOut->dims[2].size != 3))
+        pAttribute->setValue(&colorModeMono);
+    }*/
+    return pOut;
+}

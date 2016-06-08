@@ -19,38 +19,41 @@ endif
 DBD += ADSupport.dbd
 DBD += commonDriverSupport.dbd
 
-INC += ADCoreVersion.h
-INC += NDAttribute.h
-INC += NDAttributeList.h
+#INC += ADCoreVersion.h
+#INC += NDAttribute.h
+#INC += NDAttributeList.h
 INC += NDArray.h
-INC += PVAttribute.h
-INC += paramAttribute.h
-INC += functAttribute.h
-INC += asynNDArrayDriver.h
+INC += NDArrayPool.h
+#INC += PVAttribute.h
+#INC += paramAttribute.h
+#INC += functAttribute.h
+#INC += asynNDArrayDriver.h
+INC += pvNDArrayDriver.h
 INC += ADDriver.h
 INC += tinyxml.h
 INC += tinystr.h
 
 LIBRARY_IOC = ADBase
-LIB_SRCS += NDAttribute.cpp
-LIB_SRCS += NDAttributeList.cpp
+#LIB_SRCS += NDAttribute.cpp
+#LIB_SRCS += NDAttributeList.cpp
 LIB_SRCS += NDArrayPool.cpp
 LIB_SRCS += NDArray.cpp
-LIB_SRCS += asynNDArrayDriver.cpp
+#LIB_SRCS += asynNDArrayDriver.cpp
+LIB_SRCS += pvNDArrayDriver.cpp
 LIB_SRCS += ADDriver.cpp
-LIB_SRCS += paramAttribute.cpp
+#LIB_SRCS += paramAttribute.cpp
 ifeq ($(EPICS_LIBCOM_ONLY),YES)
   USR_CXXFLAGS += -DEPICS_LIBCOM_ONLY
 else
-  LIB_SRCS += PVAttribute.cpp
-  LIB_SRCS += functAttribute.cpp
+#  LIB_SRCS += PVAttribute.cpp
+#  LIB_SRCS += functAttribute.cpp
   LIB_SRCS += parseAreaPrefixes.c
   LIB_SRCS += myTimeStampSource.cpp
-  LIB_SRCS += myAttributeFunctions.cpp
+#  LIB_SRCS += myAttributeFunctions.cpp
 endif
 LIB_SRCS += tinyxml.cpp tinystr.cpp tinyxmlparser.cpp tinyxmlerror.cpp
 
-LIB_LIBS += asyn
+LIB_LIBS += pvPortDriver
 ifeq ($(EPICS_LIBCOM_ONLY),YES)
   LIB_LIBS += Com
 else

@@ -1,75 +1,95 @@
 #ifndef NDPluginDriver_H
 #define NDPluginDriver_H
 
+#include <pv/pvAccess.h>
+
 #include <epicsTypes.h>
 #include <epicsMessageQueue.h>
 #include <epicsTime.h>
+#include <deque>
 
-#include "asynNDArrayDriver.h"
+#include "pvNDArrayDriver.h"
 
-#define NDPluginDriverArrayPortString           "NDARRAY_PORT"          /**< (asynOctet,    r/w) The port for the NDArray interface */
-#define NDPluginDriverArrayAddrString           "NDARRAY_ADDR"          /**< (asynInt32,    r/w) The address on the port */
-#define NDPluginDriverPluginTypeString          "PLUGIN_TYPE"           /**< (asynOctet,    r/o) The type of plugin */
-#define NDPluginDriverDroppedArraysString       "DROPPED_ARRAYS"        /**< (asynInt32,    r/w) Number of dropped arrays */
-#define NDPluginDriverQueueSizeString           "QUEUE_SIZE"            /**< (asynInt32,    r/w) Total queue elements */ 
-#define NDPluginDriverQueueFreeString           "QUEUE_FREE"            /**< (asynInt32,    r/w) Free queue elements */
-#define NDPluginDriverEnableCallbacksString     "ENABLE_CALLBACKS"      /**< (asynInt32,    r/w) Enable callbacks from driver (1=Yes, 0=No) */
-#define NDPluginDriverBlockingCallbacksString   "BLOCKING_CALLBACKS"    /**< (asynInt32,    r/w) Callbacks block (1=Yes, 0=No) */
-#define NDPluginDriverMinCallbackTimeString     "MIN_CALLBACK_TIME"     /**< (asynFloat64,  r/w) Minimum time between calling processCallbacks 
+#define NDPluginDriverArrayProviderString       "NDArrayProvider"       /**< (string,   r/w) The NDArray PV provider name */
+#define NDPluginDriverArrayPVString             "NDArrayPV"             /**< (string,   r/w) The NDArray PV name */
+#define NDPluginDriverArrayConnectedString      "NDArrayConnected"      /**< (boolean,  r/o) Is connected to the NDArray PV? */
+#define NDPluginDriverArrayOverrunsString       "NDArrayOverruns"       /**< (uint32,   r/o) Number of overruns */
+#define NDPluginDriverPluginTypeString          "PluginType_RBV"        /**< (string,   r/o) The type of plugin */
+#define NDPluginDriverDroppedArraysString       "DroppedArrays"         /**< (uint32,   r/w) Number of dropped arrays */
+#define NDPluginDriverQueueSizeString           "QueueSize"             /**< (uint32,   r/w) Total queue elements */
+#define NDPluginDriverQueueFreeString           "QueueFree"             /**< (uint32,   r/w) Free queue elements */
+#define NDPluginDriverEnableCallbacksString     "EnableCallbacks"       /**< (int32  ,  r/w) Enable callbacks from driver */
+#define NDPluginDriverBlockingCallbacksString   "BlockingCallbacks"     /**< (boolean,  r/w) Callbacks block */
+#define NDPluginDriverMinCallbackTimeString     "MinCallbackTime"       /**< (double,   r/w) Minimum time between calling processCallbacks
                                                                          *  to execute plugin code */
 
-/** Class from which actual plugin drivers are derived; derived from asynNDArrayDriver */
-class epicsShareClass NDPluginDriver : public asynNDArrayDriver {
+/** Class from which actual plugin drivers are derived; derived from pvNDArrayDriver */
+class epicsShareClass NDPluginDriver :
+    public PVNDArrayDriver,
+    public virtual epics::pvAccess::ChannelRequester,
+    public virtual epics::pvData::MonitorRequester
+{
 public:
-    NDPluginDriver(const char *portName, int queueSize, int blockingCallbacks, 
-                   const char *NDArrayPort, int NDArrayAddr, int maxAddr, int numParams,
-                   int maxBuffers, size_t maxMemory, int interfaceMask, int interruptMask,
-                   int asynFlags, int autoConnect, int priority, int stackSize);
-                 
-    /* These are the methods that we override from asynNDArrayDriver */
-    virtual asynStatus writeInt32(asynUser *pasynUser, epicsInt32 value);
-    virtual asynStatus writeOctet(asynUser *pasynUser, const char *value, size_t maxChars,
-                          size_t *nActual);
-    virtual asynStatus readInt32Array(asynUser *pasynUser, epicsInt32 *value,
-                                        size_t nElements, size_t *nIn);
+    NDPluginDriver(std::string const & prefix, unsigned int queueSize,
+                   bool blockingCallbacks, std::string const & provider,
+                   std::string const & NDArrayPV,
+                   int maxBuffers, size_t maxMemory, int stackSize);
+
+    /* These are the methods that we override from pvNDArrayDriver */
+    virtual void process (epics::pvDatabase::PVRecord const * record);
                                      
     /* These are the methods that are new to this class */
-    virtual void driverCallback(asynUser *pasynUser, void *genericPointer);
+    virtual void driverCallback(NDArrayPtr pArray);
     virtual void processTask(void);
+    virtual ~NDPluginDriver(){}
 
 protected:
-    virtual void processCallbacks(NDArray *pArray);
-    virtual asynStatus connectToArrayPort(void);    
+    virtual void processCallbacks(NDArrayPtr pArray);
+    virtual int connectToArrayPort(void);
 
-protected:
-    int NDPluginDriverArrayPort;
-    #define FIRST_NDPLUGIN_PARAM NDPluginDriverArrayPort
-    int NDPluginDriverArrayAddr;
-    int NDPluginDriverPluginType;
-    int NDPluginDriverDroppedArrays;
-    int NDPluginDriverQueueSize;
-    int NDPluginDriverQueueFree;
-    int NDPluginDriverEnableCallbacks;
-    int NDPluginDriverBlockingCallbacks;
-    int NDPluginDriverMinCallbackTime;
-    #define LAST_NDPLUGIN_PARAM NDPluginDriverMinCallbackTime
+    epics::pvPortDriver::StringParamPtr  NDPluginDriverArrayProvider;
+    epics::pvPortDriver::StringParamPtr  NDPluginDriverArrayPV;
+    epics::pvPortDriver::BooleanParamPtr NDPluginDriverArrayConnected;
+    epics::pvPortDriver::ULongParamPtr   NDPluginDriverArrayOverruns;
+    epics::pvPortDriver::StringParamPtr  NDPluginDriverPluginType;
+    epics::pvPortDriver::IntParamPtr     NDPluginDriverDroppedArrays;
+    epics::pvPortDriver::IntParamPtr     NDPluginDriverQueueSize;
+    epics::pvPortDriver::IntParamPtr     NDPluginDriverQueueFree;
+    epics::pvPortDriver::IntParamPtr     NDPluginDriverEnableCallbacks;
+    epics::pvPortDriver::BooleanParamPtr NDPluginDriverBlockingCallbacks;
+    epics::pvPortDriver::DoubleParamPtr  NDPluginDriverMinCallbackTime;
 
 private:
-    virtual asynStatus setArrayInterrupt(int connect);
-    
-    /* The asyn interfaces we access as a client */
-    void *asynGenericPointerInterruptPvt;
+    virtual int setArrayInterrupt(int connect);
 
     /* Our data */
-    asynUser *pasynUserGenericPointer;          /**< asynUser for connecting to NDArray driver */
-    void *asynGenericPointerPvt;                /**< Handle for connecting to NDArray driver */
-    asynGenericPointer *pasynGenericPointer;    /**< asyn interface for connecting to NDArray driver */
-    bool connectedToArrayPort;
-    epicsMessageQueueId msgQId;
-    epicsTimeStamp lastProcessTime;
-    int dimsPrev[ND_ARRAY_MAX_DIMS];
+    bool mGotFirst;
+    bool mConnectedToArrayPort;
+    epics::pvData::TimeStamp mLastProcessTime;
+    epics::pvAccess::ChannelProvider::shared_pointer mProvider;
+    epics::pvAccess::Channel::shared_pointer mChannel;
+    epics::pvData::MonitorPtr mMonitor;
+    epicsMessageQueueId mMsgQId;
+    std::deque<NDArrayPtr> mQueue;
+    std::tr1::shared_ptr<NDPluginDriver> mThisPtr;
+
+    // Implemented for pvData::Requester
+    std::string getRequesterName (void);
+    void message (std::string const & message, epics::pvData::MessageType messageType);
+
+    // Implemented for pvAccess::ChannelRequester
+    void channelCreated (const epics::pvData::Status& status,
+            epics::pvAccess::Channel::shared_pointer const & channel);
+    void channelStateChange (epics::pvAccess::Channel::shared_pointer const & channel,
+            epics::pvAccess::Channel::ConnectionState state);
+
+    // Implemented for pvData::MonitorRequester
+    void monitorConnect (epics::pvData::Status const & status,
+            epics::pvData::MonitorPtr const & monitor,
+            epics::pvData::StructureConstPtr const & structure);
+    void monitorEvent (epics::pvData::MonitorPtr const & monitor);
+    void unlisten (epics::pvData::MonitorPtr const & monitor);
 };
-#define NUM_NDPLUGIN_PARAMS ((int)(&LAST_NDPLUGIN_PARAM - &FIRST_NDPLUGIN_PARAM + 1))
 
     
 #endif

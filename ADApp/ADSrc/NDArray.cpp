@@ -11,204 +11,316 @@
  *
  */
 
-#include <string.h>
-#include <stdio.h>
-#include <ellLib.h>
-
-#include <epicsMutex.h>
-#include <epicsTypes.h>
-#include <epicsString.h>
-#include <ellLib.h>
-#include <cantProceed.h>
-
-#include <epicsExport.h>
-
 #include "NDArray.h"
 
-/** NDArray constructor, no parameters.
-  * Initializes all fields to 0.  Creates the attribute linked list and linked list mutex. */
-NDArray::NDArray()
-  : referenceCount(0), pNDArrayPool(NULL),  
-    uniqueId(0), timeStamp(0.0), ndims(0), dataType(NDInt8),
-    dataSize(0),  pData(NULL)
+#include <vector>
+#include <pv/pvData.h>
+#include <pv/ntndarray.h>
+
+using namespace std;
+using namespace epics::nt;
+using namespace epics::pvData;
+
+void NDArray::initDimension (NDDimension_t & dim, size_t size, size_t offset,
+        int binning, int reverse)
 {
-  this->epicsTS.secPastEpoch = 0;
-  this->epicsTS.nsec = 0;
-  memset(this->dims, 0, sizeof(this->dims));
-  memset(&this->node, 0, sizeof(this->node));
-  this->pAttributeList = new NDAttributeList();
+    dim.size    = size;
+    dim.offset  = offset;
+    dim.binning = binning;
+    dim.reverse = reverse;
 }
 
-/** NDArray destructor 
-  * Frees the data array, deletes all attributes, frees the attribute list and destroys the mutex. */
-NDArray::~NDArray()
+void NDArray::initDimensions (vector<size_t> const & dimSizes)
 {
-  if (this->pData) free(this->pData);
-  delete this->pAttributeList;
-}
+    PVStructureArrayPtr dimension(mArray->getDimension());
+    PVStructureArray::svector dimensionVec(dimension->reuse());
+    StructureConstPtr dimensionStruct(dimension->getStructureArray()->getStructure());
 
-/** Convenience method returns information about an NDArray, including the total number of elements, 
-  * the number of bytes per element, and the total number of bytes in the array.
-  \param[out] pInfo Pointer to an NDArrayInfo_t structure, must have been allocated by caller. */
-int NDArray::getInfo(NDArrayInfo_t *pInfo)
-{
-  int i;
-  NDAttribute *pAttribute;
+    dimensionVec.resize(dimSizes.size());
+    for(size_t i = 0; i < dimSizes.size(); ++i)
+    {
+        if(!dimensionVec[i])
+            dimensionVec[i] = getPVDataCreate()->createPVStructure(dimensionStruct);
 
-  switch(this->dataType) {
-    case NDInt8:
-      pInfo->bytesPerElement = sizeof(epicsInt8);
-      break;
-    case NDUInt8:
-      pInfo->bytesPerElement = sizeof(epicsUInt8);
-      break;
-    case NDInt16:
-      pInfo->bytesPerElement = sizeof(epicsInt16);
-      break;
-    case NDUInt16:
-      pInfo->bytesPerElement = sizeof(epicsUInt16);
-      break;
-    case NDInt32:
-      pInfo->bytesPerElement = sizeof(epicsInt32);
-      break;
-    case NDUInt32:
-      pInfo->bytesPerElement = sizeof(epicsUInt32);
-      break;
-    case NDFloat32:
-      pInfo->bytesPerElement = sizeof(epicsFloat32);
-      break;
-    case NDFloat64:
-      pInfo->bytesPerElement = sizeof(epicsFloat64);
-      break;
-    default:
-      return(ND_ERROR);
-      break;
-  }
-  pInfo->nElements = 1;
-  for (i=0; i<this->ndims; i++) pInfo->nElements *= this->dims[i].size;
-  pInfo->totalBytes = pInfo->nElements * pInfo->bytesPerElement;
-  pInfo->colorMode = NDColorModeMono;
-  pAttribute = this->pAttributeList->find("ColorMode");
-  if (pAttribute) pAttribute->getValue(NDAttrInt32, &pInfo->colorMode);
-  pInfo->xDim        = 0;
-  pInfo->yDim        = 0;
-  pInfo->colorDim    = 0;
-  pInfo->xSize       = 0;
-  pInfo->ySize       = 0;
-  pInfo->colorSize   = 0;
-  pInfo->xStride     = 0;
-  pInfo->yStride     = 0;
-  pInfo->colorStride = 0;
-  if (this->ndims > 0) {
-    pInfo->xStride = 1;
-    pInfo->xSize   = this->dims[0].size;
-  }
-  if (this->ndims > 1) {
-    pInfo->yDim  = 1;
-    pInfo->yStride = pInfo->xSize;
-    pInfo->ySize   = this->dims[1].size;
-  }
-  if (this->ndims == 3) {
-    switch (pInfo->colorMode) {
-      case NDColorModeRGB1:
-        pInfo->xDim    = 1;
-        pInfo->yDim    = 2;
-        pInfo->colorDim  = 0;
-        pInfo->xStride   = this->dims[0].size;
-        pInfo->yStride   = this->dims[0].size * this->dims[1].size;
-        pInfo->colorStride = 1;
-        break;
-      case NDColorModeRGB2:
-        pInfo->xDim    = 0;
-        pInfo->yDim    = 2;
-        pInfo->colorDim  = 1;
-        pInfo->xStride   = 1;
-        pInfo->yStride   = this->dims[0].size * this->dims[1].size;
-        pInfo->colorStride = this->dims[0].size;
-        break;
-      case NDColorModeRGB3:
-        pInfo->xDim    = 0;
-        pInfo->yDim    = 1;
-        pInfo->colorDim  = 2;
-        pInfo->xStride   = 1;
-        pInfo->yStride   = this->dims[0].size;
-        pInfo->colorStride = this->dims[0].size * this->dims[1].size;
-        break;
-      default:
-        // This is a 3-D array, but is not RGB
-        pInfo->xDim    = 0;
-        pInfo->yDim    = 1;
-        pInfo->colorDim  = 2;
-        pInfo->xStride   = 1;
-        pInfo->yStride   = this->dims[0].size;
-        pInfo->colorStride = this->dims[0].size * this->dims[1].size;
-        break;
+        dimensionVec[i]->getSubField<PVInt>("size")->put(dimSizes[i]);
+        dimensionVec[i]->getSubField<PVInt>("offset")->put(0);
+        dimensionVec[i]->getSubField<PVInt>("fullSize")->put(dimSizes[i]);
+        dimensionVec[i]->getSubField<PVInt>("binning")->put(1);
+        dimensionVec[i]->getSubField<PVBoolean>("reverse")->put(false);
     }
-    pInfo->xSize     = this->dims[pInfo->xDim].size;
-    pInfo->ySize     = this->dims[pInfo->yDim].size;
-    pInfo->colorSize = this->dims[pInfo->colorDim].size;
-  }
-  return(ND_SUCCESS);
+    dimension->replace(freeze(dimensionVec));
 }
 
-/** Initializes the dimension structure to size=size, binning=1, reverse=0, offset=0.
-  * \param[in] pDimension Pointer to an NDDimension_t structure, must have been allocated by caller.
-  * \param[in] size The size of this dimension. */
-int NDArray::initDimension(NDDimension_t *pDimension, size_t size)
+void NDArray::eraseAttributes (void)
 {
-  pDimension->size=size;
-  pDimension->binning = 1;
-  pDimension->offset = 0;
-  pDimension->reverse = 0;
-  return ND_SUCCESS;
+    mArray->getAttribute().reset();
 }
 
-/** Calls NDArrayPool::reserve() for this NDArray object; increases the reference count for this array. */
-int NDArray::reserve()
+NDArray::NDArray (void) :
+    mArray(NTNDArray::createBuilder()->addTimeStamp()->create())/*,
+    mAttributes(NDAttributeList::create(mArray->getAttribute()))*/
 {
-  const char *functionName = "NDArray::reserve";
-
-  if (!pNDArrayPool) {
-    printf("%s: WARNING, no owner\n", functionName);
-    return(ND_ERROR);
-  }
-  return(pNDArrayPool->reserve(this));
 }
 
-/** Calls NDArrayPool::release() for this object; decreases the reference count for this array. */
-int NDArray::release()
+NDArray::NDArray (NTNDArrayPtr array) :
+    mArray(array)
 {
-  const char *functionName = "NDArray::release";
-
-  if (!pNDArrayPool) {
-    printf("%s: WARNING, no owner\n", functionName);
-    return(ND_ERROR);
-  }
-  return(pNDArrayPool->release(this));
 }
 
-/** Reports on the properties of the array.
-  * \param[in] fp File pointer for the report output.
-  * \param[in] details Level of report details desired; if >5 calls NDAttributeList::report().
-  */
-int NDArray::report(FILE *fp, int details)
+NTNDArrayPtr NDArray::getArray (void) const
 {
-  int dim;
-  
-  fprintf(fp, "\n");
-  fprintf(fp, "NDArray  Array address=%p:\n", this);
-  fprintf(fp, "  ndims=%d dims=[",
-    this->ndims);
-  for (dim=0; dim<this->ndims; dim++) fprintf(fp, "%d ", (int)this->dims[dim].size);
-  fprintf(fp, "]\n");
-  fprintf(fp, "  dataType=%d, dataSize=%d, pData=%p\n",
-        this->dataType, (int)this->dataSize, this->pData);
-  fprintf(fp, "  uniqueId=%d, timeStamp=%f\n",
-        this->uniqueId, this->timeStamp);
-  fprintf(fp, "  number of attributes=%d\n", this->pAttributeList->count());
-  if (details > 5) {
-    this->pAttributeList->report(fp, details);
-  }
-  return ND_SUCCESS;
+    return mArray;
 }
 
+vector<NDDimension_t> NDArray::getDimensions (void) const
+{
+    PVStructureArrayPtr dimsArray(mArray->getDimension());
+    PVStructureArray::const_svector dimsVector(dimsArray->view());
+
+    size_t ndims = dimsVector.size();
+    vector<NDDimension_t> dims(ndims);
+
+    for(size_t i = 0; i < ndims; ++i)
+    {
+        dims[i].size     = dimsVector[i]->getSubField<PVInt>("size")->get();
+        dims[i].fullSize = dimsVector[i]->getSubField<PVInt>("fullSize")->get();
+        dims[i].offset   = dimsVector[i]->getSubField<PVInt>("offset")->get();
+        dims[i].binning  = dimsVector[i]->getSubField<PVInt>("binning")->get();
+        dims[i].reverse  = dimsVector[i]->getSubField<PVBoolean>("reverse")->get();
+    }
+
+    return dims;
+}
+
+ScalarType NDArray::getDataType (void) const
+{
+    string name(mArray->getValue()->getSelectedFieldName());
+
+    if(name.empty())
+        throw std::runtime_error("no union field selected");
+
+    return ScalarTypeFunc::getScalarType(name.substr(0,name.find("Value")));
+}
+
+NDColorMode_t NDArray::getColorMode (void) const
+{
+    NDColorMode_t colorMode = NDColorModeMono;
+    PVStructureArray::const_svector attrs(mArray->getAttribute()->view());
+
+    for(PVStructureArray::const_svector::iterator it(attrs.cbegin());
+            it != attrs.cend(); ++it)
+    {
+        if((*it)->getSubField<PVString>("name")->get() == "ColorMode")
+        {
+            PVUnionPtr field((*it)->getSubField<PVUnion>("value"));
+            colorMode = (NDColorMode_t) 0;//static_pointer_cast<PVInt>(field->get())->get();
+            break;
+        }
+    }
+
+    return colorMode;
+}
+
+NDArrayInfo_t NDArray::getInfo (void) const
+{
+    NDArrayInfo_t info = {};
+
+    vector<NDDimension_t> dims(getDimensions());
+    size_t ndims = dims.size();
+
+    info.nElements = 1;
+
+    for(size_t i = 0; i < ndims; ++i)
+        info.nElements *= dims[i].size;
+
+    info.bytesPerElement = ScalarTypeFunc::elementSize(getDataType());
+    info.totalBytes      = info.nElements*info.bytesPerElement;
+    info.colorMode       = getColorMode();
+
+    if(ndims > 0)
+    {
+        info.x.dim    = 0;
+        info.x.stride = 1;
+        info.x.size   = dims[0].size;
+    }
+
+    if(ndims > 1)
+    {
+        info.y.dim    = 1;
+        info.y.stride = 1;
+        info.y.size   = dims[1].size;
+    }
+
+    if(ndims == 3)
+    {
+        switch(info.colorMode)
+        {
+        case NDColorModeRGB1:
+            info.x.dim        = 1;
+            info.y.dim        = 2;
+            info.color.dim    = 0;
+            info.x.stride     = dims[0].size;
+            info.y.stride     = dims[0].size*dims[1].size;
+            info.color.stride = 1;
+            break;
+
+        case NDColorModeRGB2:
+            info.x.dim        = 0;
+            info.y.dim        = 2;
+            info.color.dim    = 1;
+            info.x.stride     = 1;
+            info.y.stride     = dims[0].size*dims[1].size;
+            info.color.stride = dims[0].size;
+            break;
+
+        case NDColorModeRGB3:
+            info.x.dim        = 1;
+            info.y.dim        = 2;
+            info.color.dim    = 0;
+            info.x.stride     = dims[0].size;
+            info.y.stride     = dims[0].size*dims[1].size;
+            info.color.stride = 1;
+            break;
+
+        default:
+            info.x.dim        = 0;
+            info.y.dim        = 1;
+            info.color.dim    = 2;
+            info.x.stride     = 1;
+            info.y.stride     = dims[0].size;
+            info.color.stride = dims[0].size*dims[1].size;
+            break;
+        }
+
+        info.x.size     = dims[info.x.dim].size;
+        info.y.size     = dims[info.y.dim].size;
+        info.color.size = dims[info.color.dim].size;
+    }
+
+    return info;
+}
+
+int32 NDArray::getUniqueId (void) const
+{
+    return mArray->getUniqueId()->get();
+}
+
+int64 NDArray::getCompressedSize (void) const
+{
+    return mArray->getCompressedDataSize()->get();
+}
+
+int64 NDArray::getUncompressedSize (void) const
+{
+    return mArray->getUncompressedDataSize()->get();
+}
+
+TimeStamp NDArray::getTimeStamp (void) const
+{
+
+    PVTimeStamp pvTimeStamp;
+    pvTimeStamp.attach(mArray->getDataTimeStamp());
+
+    TimeStamp timeStamp;
+    pvTimeStamp.get(timeStamp);
+
+    return timeStamp;
+}
+
+TimeStamp NDArray::getEpicsTimeStamp (void) const
+{
+    PVTimeStamp pvTimeStamp;
+    pvTimeStamp.attach(mArray->getTimeStamp());
+
+    TimeStamp timeStamp;
+    pvTimeStamp.get(timeStamp);
+
+    return timeStamp;
+}
+
+/*
+NDAttributeListPtr NDArray::getAttributeList (void)
+{
+    return mAttributes;
+}*/
+
+int NDArray::report (FILE *fp, int details)
+{
+    fprintf(fp, "\n");
+    fprintf(fp, "NDArray: address=%p:\n", this);
+
+    vector<NDDimension_t> dims(getDimensions());
+    size_t ndims = dims.size();
+
+    fprintf(fp, "  ndims=%lu dims=[", ndims);
+    for (size_t i = 0; i < ndims; i++)
+        fprintf(fp, "%lu ", dims[i].size);
+    fprintf(fp, "]\n");
+
+    fprintf(fp, "  dataType=%s\n", ScalarTypeFunc::name(getDataType()));
+    fprintf(fp, "  compressedSize=%lu, uncompressedSize=%lu",
+            getCompressedSize(), getUncompressedSize());
+    fprintf(fp, "  uniqueId=%d, timeStamp=%f\n",
+        getUniqueId(), getTimeStamp().toSeconds());
+
+    /*fprintf(fp, "  number of attributes=%d\n", mAttributes->count());
+
+    if (details > 5)
+        mAttributes->report(fp, details);*/
+
+    return 0;
+}
+
+void NDArray::setDimensions (vector<NDDimension_t> const & dims)
+{
+    PVStructureArrayPtr dimsArray(mArray->getDimension());
+    PVStructureArray::svector dimsVector(dimsArray->reuse());
+    StructureConstPtr dimStructure(dimsArray->getStructureArray()->getStructure());
+
+    size_t ndims = dims.size();
+    dimsVector.resize(ndims);
+
+    for (size_t i = 0; i < ndims; i++)
+    {
+        if (!dimsVector[i] || !dimsVector[i].unique())
+            dimsVector[i] = getPVDataCreate()->createPVStructure(dimStructure);
+
+        dimsVector[i]->getSubField<PVInt>("size")->put(dims[i].size);
+        dimsVector[i]->getSubField<PVInt>("fullSize")->put(dims[i].fullSize);
+        dimsVector[i]->getSubField<PVInt>("offset")->put(dims[i].offset);
+        dimsVector[i]->getSubField<PVInt>("binning")->put(dims[i].binning);
+        dimsVector[i]->getSubField<PVBoolean>("reverse")->put(dims[i].reverse);
+    }
+    dimsArray->replace(freeze(dimsVector));
+}
+
+void NDArray::setUniqueId (int32 value)
+{
+    mArray->getUniqueId()->put(value);
+}
+
+void NDArray::setCompressedSize (int64 value)
+{
+    return mArray->getCompressedDataSize()->put(value);
+}
+
+void NDArray::setUncompressedSize (int64 value)
+{
+    return mArray->getUncompressedDataSize()->put(value);
+}
+
+void NDArray::setTimeStamp (TimeStamp const & value)
+{
+    PVTimeStamp pvTimeStamp;
+    pvTimeStamp.attach(mArray->getDataTimeStamp());
+
+    pvTimeStamp.set(value);
+}
+
+void NDArray::setEpicsTimeStamp (TimeStamp const & value)
+{
+    PVTimeStamp pvTimeStamp;
+    pvTimeStamp.attach(mArray->getTimeStamp());
+
+    pvTimeStamp.set(value);
+}

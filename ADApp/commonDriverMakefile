@@ -3,7 +3,8 @@
 
 $(PROD_NAME)_DBD += commonDriverSupport.dbd
 
-PROD_LIBS               += NDPlugin ADBase netCDF
+#PROD_LIBS               += NDPlugin ADBase netCDF
+PROD_LIBS               += NDPlugin ADBase pvAccess pvData pvDatabase nt pvPortDriver
 
 ifdef ADPLUGINEDGE
   PROD_LIBS             += NDPluginEdge
