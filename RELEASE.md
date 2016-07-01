@@ -23,9 +23,9 @@ files respectively, in the configure/ directory of the appropriate release of th
 Release Notes
 =============
 
-R2-5 (March XXX, 2016)
+R2-5 (May XXX, 2016)
 ========================
-### NDPluginBase
+### NDPluginDriver
 * Added the ability to change the QueueSize of a plugin at run-time. This can be very useful,
   particularly for file plugins where an acquisition of N frames is overflowing the queue,
   but increasing the queue can fix the problem. This will be even more useful in ADCore R3-0
@@ -36,6 +36,11 @@ R2-5 (March XXX, 2016)
   so the limits on total number of arrays and total memory defined in the constructor will be obeyed.
   This is very important in preventing system freezes if the user accidentally tries allocate all the
   system memory, which can effectively crash the computer.
+
+### Added a new start() method that must be called after the plugin object is created.  This requires
+  a small change to all plugins.  The plugins in ADCore/ADApp/pluginSrc can be used as examples.  This
+  change was required to prevent a race condition when the plugin only existed for a very short
+  time, which happens in the unit tests in ADCore/ADApp/pluginsTests.
 
 ### NDPluginTimeSeries
 * New plugin to for time-series data.  The plugin accepts input arrays of dimensions
@@ -89,6 +94,15 @@ R2-5 (March XXX, 2016)
 
 ### NDArrayBase.template, NDPluginDriver.cpp
 * Set ArrayCallbacks.VAL to 1 so array callbacks are enabled by default.
+
+### NDFileHDF5
+* Added capability to save NDAttributes of type NDAttrString as a 1-D array of strings (HDF5 type H5T_C_S1) rather
+  than a 2-D array of 8-bit integers (HDF5 type H5T_NATIVE_CHAR), which is the datatype used prior to R2-5.  
+  H5T_NATIVE_CHAR is really
+  intended to be an integer data type, and so most HDF5 utilities (h5dump, HDFView, etc.) display
+  these attributes by default as an array of integer numbers rather than as a string.  There is a new
+  PV StrAttrDataType that controls which data type is used.  The default is "Char" which is backwards
+  compatible and uses H5T_NATIVE_CHAR.  "String" selects H5T_C_S1.
 
 ### NDPluginBase.template
 * Changed QueueSize from longin to longout, because the plugin queue size can now be changed at runtime.
