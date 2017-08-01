@@ -33,9 +33,10 @@
   #define M_PI 3.14159265358979323846
 #endif
 
-using namespace epics::pvData;
 using std::vector;
 using std::string;
+
+using namespace epics::pvData;
 
 static const char *driverName="NDPluginStats";
 
@@ -457,7 +458,7 @@ void NDPluginStats::doTimeSeriesCallbacks()
   * Does image statistics.
   * \param[in] pArray  The NDArray from the callback.
   */
-void NDPluginStats::processCallbacks(NDArrayConstPtr pArray)
+void NDPluginStats::processCallbacks(NDArrayConstPtr & pArray)
 {
     /* This function does array statistics.
      * It is called with the mutex already locked.  It unlocks it during long calculations when private
@@ -681,7 +682,7 @@ void NDPluginStats::processCallbacks(NDArrayConstPtr pArray)
         free(pStats->histogram);
     }
 
-    NDPluginDriver::endProcessCallbacks(pArray, true, true);
+    NDPluginDriver::endProcessCallbacks(pArray, true);
     
     callParamCallbacks();
 }

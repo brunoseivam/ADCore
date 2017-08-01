@@ -44,7 +44,7 @@ public:
                  int maxBuffers, size_t maxMemory,
                  int priority, int stackSize, int maxThreads);
     /* These methods override the virtual methods in the base class */
-    void processCallbacks(NDArray::const_shared_pointer pArray);
+    void processCallbacks(NDArrayConstPtr & pArray);
     asynStatus writeInt32(asynUser *pasynUser, epicsInt32 value);
 
 protected:

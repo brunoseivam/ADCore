@@ -78,9 +78,10 @@ public:
     void sortingTask();
 
 protected:
-    virtual void processCallbacks(NDArrayConstPtr pArray) = 0;
-    virtual void beginProcessCallbacks(NDArrayConstPtr pArray);
-    virtual asynStatus endProcessCallbacks(NDArrayConstPtr pArray, bool copyArray=false, bool readAttributes=true);
+    virtual void processCallbacks(NDArrayConstPtr & pArray) = 0;
+    virtual void beginProcessCallbacks(NDArrayConstPtr & pArray);
+    virtual asynStatus endProcessCallbacks(NDArrayPtr & pArray, bool readAttributes=true);
+    virtual asynStatus endProcessCallbacks(NDArrayConstPtr & pArray, bool readAttributes=true);
     virtual asynStatus connectToArrayPort(void);
     virtual asynStatus setArrayInterrupt(bool enableCallbacks);
 

@@ -27,7 +27,11 @@
 #include <epicsExport.h>
 #include "NDPluginDriver.h"
 
-using namespace std;
+using std::string;
+using std::tr1::shared_ptr;
+using std::vector;
+using std::multiset;
+
 using namespace epics::pvData;
 using namespace epics::pvAccess;
 using namespace epics::pvDatabase;
@@ -104,7 +108,7 @@ NDPluginDriver::NDPluginDriver(const char *portName, string const & pvName, int 
     prevUniqueId_(-1000),
     sortingThreadId_(0),
     gotFirst_(false),
-    thisPtr_(tr1::shared_ptr<NDPluginDriver>(this))
+    thisPtr_(shared_ptr<NDPluginDriver>(this))
 {
     //static const char *functionName = "NDPluginDriver";
     
@@ -184,7 +188,7 @@ NDPluginDriver::~NDPluginDriver()
   * This method takes care of some bookkeeping for callbacks, updating parameters
   * from data in the class and in the NDArray.  It does asynInt32Array callbacks
   * for the dimensions array if the dimensions of the NDArray data have changed. */ 
-void NDPluginDriver::beginProcessCallbacks(NDArrayConstPtr pArray)
+void NDPluginDriver::beginProcessCallbacks(NDArrayConstPtr & pArray)
 {
     //static const char *functionName="beginProcessCallbacks";
     int colorMode=NDColorModeMono, bayerPattern=NDBayerRGGB;
@@ -238,18 +242,15 @@ void NDPluginDriver::beginProcessCallbacks(NDArrayConstPtr pArray)
 
 /** Method that is normally called at the end of the processCallbacks())
   * method in derived classes.  
-  * \param[in] pArray  The NDArray from the callback.
-  * \param[in] copyArray This flag should be true if pArray is the original array passed to processCallbacks().
-  *            It must be false if the derived class if pArray is a new NDArray that processCallbacks() created
+  * \param[in] pArray  The NDArray from the callback. This must be an array controlled by the plugin.
   * \param[in] readAttributes This flag must be true if the derived class has not yet called readAttributes() for pArray.
   *
   * This method does NDArray callbacks to downstream plugins if NDArrayCallbacks is true and SortMode is Unsorted.
   * If SortMode is sorted it inserts the NDArray into the std::multilist for callbacks in SortThread(). 
   * It keeps track of DisorderedArrays and DroppedOutputArrays. 
-  * It caches the most recent NDArray in pArrays[0]. */ 
-asynStatus NDPluginDriver::endProcessCallbacks(NDArrayConstPtr pArray, bool copyArray, bool readAttributes)
+  * It caches the most recent NDArray in pArrays[0]. */
+asynStatus NDPluginDriver::endProcessCallbacks(NDArrayPtr & pArray, bool readAttributes)
 {
-    NDArrayConstPtr pArrayOut(pArray);
     static const char *functionName = "endProcessCallbacks";
 
     int arrayCallbacks;
@@ -262,24 +263,13 @@ asynStatus NDPluginDriver::endProcessCallbacks(NDArrayConstPtr pArray, bool copy
 
     int callbacksSorted;
     getIntegerParam(NDPluginDriverSortMode, &callbacksSorted);
-    if (copyArray) {
-        pArrayOut = NDArrayPool_.copy(pArray);
+
+    if (readAttributes) {
+        NDAttributeListPtr pAttrs(pArray->getAttributeList());
+        this->getAttributes(pAttrs);
     }
-    if (pArrayOut) {
-        if (readAttributes) {
-            //cout << *pArray->viewAttributeList() << endl;
-            //TODO: getAttributeList is not const...
-            //NDAttributeListPtr pOutAttrs(pArrayOut->getAttributeList());
-            //this->getAttributes(pOutAttrs);
-        }
-        this->pArrays[0] = pArrayOut;
-    }
-    else {
-        asynPrint(this->pasynUserSelf, ASYN_TRACE_ERROR, 
-            "%s::%s: Couldn't allocate output array. Further processing terminated.\n", 
-            driverName, functionName);
-        return asynError;
-    }
+    this->pArrays[0] = pArray;
+
     if (callbacksSorted) {
         int sortSize;
         int listSize = (int)sortedNDArrayList_.size();
@@ -290,21 +280,21 @@ asynStatus NDPluginDriver::endProcessCallbacks(NDArrayConstPtr pArray, bool copy
             getIntegerParam(NDPluginDriverDroppedOutputArrays, &droppedOutputArrays);
             asynPrint(pasynUserSelf, ASYN_TRACE_WARNING, 
                 "%s::%s std::multilist size exceeded, dropped array uniqueId=%d\n",
-                driverName, functionName, pArrayOut->getUniqueId());
+                driverName, functionName, pArray->getUniqueId());
             droppedOutputArrays++;
             setIntegerParam(NDPluginDriverDroppedOutputArrays, droppedOutputArrays);
         } else {
             TimeStamp now;
             now.getCurrent();
-            sortedListElement *pListElement = new sortedListElement(pArrayOut, now);
+            sortedListElement *pListElement = new sortedListElement(pArray, now);
             sortedNDArrayList_.insert(*pListElement);
-            sortedNDArrayList_.insert(sortedListElement(pArrayOut, now));
+            sortedNDArrayList_.insert(sortedListElement(pArray, now));
         }
     } else {
         // See the comments about releasing the lock when calling doCallbacksGenericPointer above
-        NDArrayData->put(pArrayOut);
-        bool orderOK = (pArrayOut->getUniqueId() == prevUniqueId_)   ||
-                       (pArrayOut->getUniqueId() == prevUniqueId_+1);
+        NDArrayData->put(pArray);
+        bool orderOK = (pArray->getUniqueId() == prevUniqueId_)   ||
+                       (pArray->getUniqueId() == prevUniqueId_+1);
         if (!firstOutputArray_ && !orderOK) {
             int disorderedArrays;
             getIntegerParam(NDPluginDriverDisorderedArrays, &disorderedArrays);
@@ -315,9 +305,25 @@ asynStatus NDPluginDriver::endProcessCallbacks(NDArrayConstPtr pArray, bool copy
                 driverName, functionName, pArrayOut->uniqueId, prevUniqueId_, orderOK, disorderedArrays);
         }
         firstOutputArray_ = false;
-        prevUniqueId_ = pArrayOut->getUniqueId();
+        prevUniqueId_ = pArray->getUniqueId();
     }
     return asynSuccess;
+}
+
+/** Convenience method that copies the array to a modifiable version before
+  * calling endProcessCallbacks */
+asynStatus NDPluginDriver::endProcessCallbacks(NDArrayConstPtr & pArray, bool readAttributes)
+{
+    static const char *functionName = "endProcessCallbacks";
+
+    NDArrayPtr pOut(NDArrayPool_.copy(pArray));
+    if(!pOut) {
+        asynPrint(this->pasynUserSelf, ASYN_TRACE_ERROR,
+                    "%s::%s: Couldn't allocate output array. Further processing terminated.\n",
+                    driverName, functionName);
+                return asynError;
+    }
+    return endProcessCallbacks(pOut, readAttributes);
 }
 
 /** Method that is called from monitorEvent with a new NDArray.
@@ -597,7 +603,6 @@ void NDPluginDriver::sortingTask()
                 // can get access to pArrays[0] when the lock is released and cause problems with the NDArrayPool.
                 // Keep the lock for now unless we find deadlock problems.
                 //this->unlock();
-                // TODO: fix this compiler error
                 NDArrayData->put(pListElement->pArray_);
                 //this->lock();
 

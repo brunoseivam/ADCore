@@ -28,7 +28,9 @@
 #define MAX(A,B) (A)>(B)?(A):(B)
 #define MIN(A,B) (A)<(B)?(A):(B)
 
-using namespace std;
+using std::string;
+using std::vector;
+
 using namespace epics::pvData;
 
 static const char *driverName="NDPluginROI";
@@ -39,7 +41,7 @@ static const char *driverName="NDPluginROI";
   * Computes the histogram of ROI values if NDPluginROIComputeHistogram is 1.
   * \param[in] pArray  The NDArray from the callback.
   */
-void NDPluginROI::processCallbacks(NDArray::const_shared_pointer pArray)
+void NDPluginROI::processCallbacks(NDArrayConstPtr & pArray)
 {
     /* This function computes the ROIs.
      * It is called with the mutex already locked.  It unlocks it during long calculations when private
@@ -225,7 +227,7 @@ void NDPluginROI::processCallbacks(NDArray::const_shared_pointer pArray)
                 if (outputDims.size() > 1)
                     outputDims.resize(outputDims.size() - 1);
             } else {
-               i++;
+                i++;
             }
         }
     }
@@ -241,7 +243,7 @@ void NDPluginROI::processCallbacks(NDArray::const_shared_pointer pArray)
     if (outputDims.size() > 1) setIntegerParam(NDArraySizeY, (int)outputDims[userDims[1]].size);
     if (outputDims.size() > 2) setIntegerParam(NDArraySizeZ, (int)outputDims[userDims[2]].size);
 
-    NDPluginDriver::endProcessCallbacks(pOutput, false, true);
+    NDPluginDriver::endProcessCallbacks(pOutput, true);
 
     callParamCallbacks();
 
