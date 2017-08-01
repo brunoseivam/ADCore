@@ -302,7 +302,7 @@ asynStatus NDPluginDriver::endProcessCallbacks(NDArrayPtr & pArray, bool readAtt
             setIntegerParam(NDPluginDriverDisorderedArrays, disorderedArrays);
             asynPrint(pasynUserSelf, ASYN_TRACE_WARNING, 
                 "%s::%s disordered array found uniqueId=%d, prevUniqueId_=%d, orderOK=%d, disorderedArrays=%d\n",
-                driverName, functionName, pArrayOut->uniqueId, prevUniqueId_, orderOK, disorderedArrays);
+                driverName, functionName, pArray->getUniqueId(), prevUniqueId_, orderOK, disorderedArrays);
         }
         firstOutputArray_ = false;
         prevUniqueId_ = pArray->getUniqueId();
@@ -506,19 +506,12 @@ asynStatus NDPluginDriver::setArrayInterrupt(bool enableCallbacks)
 /** Connect this plugin to an NTNDArray PV */
 asynStatus NDPluginDriver::connectToArrayPort(void)
 {
-    asynStatus status;
-    asynInterface *pasynInterface;
-    int enableCallbacks;
-    std::string arrayPort;
-    int arrayAddr;
-    static const char *functionName = "connectToArrayPort";
     const char *functionName = "connectToArrayPort";
 
     string pvName;
     getStringParam(NDPluginDriverArrayPv, pvName);
 
-    getStringParam(NDPluginDriverArrayPort, arrayPort);
-    getIntegerParam(NDPluginDriverArrayAddr, &arrayAddr);
+    int enableCallbacks;
     getIntegerParam(NDPluginDriverEnableCallbacks, &enableCallbacks);
     if(channel_ && channel_->getChannelName() == pvName)
         return asynSuccess;
@@ -526,15 +519,10 @@ asynStatus NDPluginDriver::connectToArrayPort(void)
     setArrayInterrupt(false);
 
     /* Connect to the array port driver */
-    status = pasynManager->connectDevice(this->pasynUserGenericPointer_, arrayPort.c_str(), arrayAddr);
-    if (status != asynSuccess) {
     Channel::shared_pointer channel = provider_->createChannel(pvName, thisPtr_);
     if(!channel)
     {
         asynPrint(this->pasynUserSelf, ASYN_TRACE_ERROR,
-                  "%s::%s Error calling pasynManager->connectDevice to array port %s address %d, status=%d, error=%s\n",
-                  driverName, functionName, arrayPort.c_str(), arrayAddr, status, this->pasynUserGenericPointer_->errorMessage);
-        return (status);
                 "%s::%s ERROR: Couldn't create channel for: %s\n",
                 driverName, functionName, pvName.c_str());
         return asynError;
@@ -545,9 +533,6 @@ asynStatus NDPluginDriver::connectToArrayPort(void)
     if(!monitor)
     {
         asynPrint(this->pasynUserSelf, ASYN_TRACE_ERROR,
-                  "%s::connectToPort ERROR: Can't find asynGenericPointer interface on array port %s address %d\n",
-                  driverName, arrayPort.c_str(), arrayAddr);
-        return(asynError);
                 "%s::%s ERROR: Couldn't create monitor\n",
                 driverName, functionName);
         return asynError;
@@ -615,11 +600,10 @@ void NDPluginDriver::sortingTask()
                     setIntegerParam(NDPluginDriverDisorderedArrays, disorderedArrays);
                     asynPrint(pasynUserSelf, ASYN_TRACE_WARNING, 
                         "%s::%s disordered array found uniqueId=%d, prevUniqueId_=%d, orderOK=%d, disorderedArrays=%d\n",
-                        driverName, functionName, pListElement->pArray_->uniqueId, prevUniqueId_, 
+                        driverName, functionName, pListElement->pArray_->getUniqueId(), prevUniqueId_,
                         orderOK, disorderedArrays);
                 }
-                prevUniqueId_ = pListElement->pArray_->uniqueId;
-                pListElement->pArray_->release();
+                prevUniqueId_ = pListElement->pArray_->getUniqueId();
                 sortedNDArrayList_.erase(pListElement);
                 firstOutputArray_ = false;
             } else  {
