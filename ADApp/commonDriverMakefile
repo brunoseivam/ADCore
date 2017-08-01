@@ -11,15 +11,8 @@ $(PROD_NAME)_DBD += ADSupport.dbd
 
 #$(PROD_NAME)_DBD += NDFileNull.dbd
 
-ifeq ($(WITH_EPICS_V4),YES)
-#  $(PROD_NAME)_DBD += NDPluginPva.dbd
-  $(PROD_NAME)_DBD += PVAServerRegister.dbd
-#  PROD_LIBS += ntndArrayConverter
-  PROD_LIBS += nt
-  PROD_LIBS += pvDatabase
-  PROD_LIBS += pvAccess pvAccessIOC
-  PROD_LIBS += pvData
-endif
+$(PROD_NAME)_DBD += PVAServerRegister.dbd
+PROD_LIBS += nt pvDatabase pvAccessIOC pvAccess pvData
 
 #ifeq ($(WITH_NETCDF),YES)
 #  $(PROD_NAME)_DBD += NDFileNetCDF.dbd
