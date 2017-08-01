@@ -21,16 +21,17 @@
 
 class sortedListElement {
     public:
-        sortedListElement(NDArray *pArray, epicsTimeStamp time);
+        sortedListElement(NDArrayConstPtr pArray, epics::pvData::TimeStamp time);
         friend bool operator<(const sortedListElement& lhs, const sortedListElement& rhs) {
-            return (lhs.pArray_->uniqueId < rhs.pArray_->uniqueId);
+            return (lhs.pArray_->getUniqueId() < rhs.pArray_->getUniqueId());
         }
-        NDArray *pArray_;
-        epicsTimeStamp insertionTime_;
+        NDArrayConstPtr pArray_;
+        epics::pvData::TimeStamp insertionTime_;
 };
 
-#define NDPluginDriverArrayPortString           "NDARRAY_PORT"          /**< (asynOctet,    r/w) The port for the NDArray interface */
-#define NDPluginDriverArrayAddrString           "NDARRAY_ADDR"          /**< (asynInt32,    r/w) The address on the port */
+#define NDPluginDriverArrayPvString             "NTNDARRAY_PV"          /**< (asynOctet,    r/w) This plugin's source of NTNDArrays */
+#define NDPluginDriverArrayConnectedString      "NTNDARRAY_CONNECTED"   /**< (asynInt32,    r/o) Is connected to source? */
+#define NDPluginDriverArrayOverrunsString       "NTNDARRAY_OVERRUNS"    /**< (asynInt32,    r/o) Number of source overrruns */
 #define NDPluginDriverPluginTypeString          "PLUGIN_TYPE"           /**< (asynOctet,    r/o) The type of plugin */
 #define NDPluginDriverDroppedArraysString       "DROPPED_ARRAYS"        /**< (asynInt32,    r/w) Number of dropped input arrays */
 #define NDPluginDriverQueueSizeString           "QUEUE_SIZE"            /**< (asynInt32,    r/w) Total queue elements */ 
@@ -49,13 +50,19 @@ class sortedListElement {
 #define NDPluginDriverExecutionTimeString       "EXECUTION_TIME"        /**< (asynFloat64,  r/o) The last execution time (milliseconds) */
 #define NDPluginDriverMinCallbackTimeString     "MIN_CALLBACK_TIME"     /**< (asynFloat64,  r/w) Minimum time between calling processCallbacks 
                                                                          *  to execute plugin code */
+
 /** Class from which actual plugin drivers are derived; derived from asynNDArrayDriver */
-class epicsShareClass NDPluginDriver : public asynNDArrayDriver, public epicsThreadRunable {
+class epicsShareClass NDPluginDriver :
+    public asynNDArrayDriver,
+    public epicsThreadRunable,
+    public virtual epics::pvAccess::ChannelRequester,
+    public virtual epics::pvData::MonitorRequester
+{
 public:
-    NDPluginDriver(const char *portName, int queueSize, int blockingCallbacks, 
-                   const char *NDArrayPort, int NDArrayAddr, int maxAddr,
-                   int maxBuffers, size_t maxMemory, int interfaceMask, int interruptMask,
-                   int asynFlags, int autoConnect, int priority, int stackSize, int maxThreads);
+    NDPluginDriver(const char *portName, std::string const & pvName, int queueSize, int blockingCallbacks,
+                   std::string const & sourcePvName, int maxAddr, int maxBuffers, size_t maxMemory,
+                   int interfaceMask, int interruptMask, int asynFlags, int autoConnect, int priority,
+                   int stackSize, int maxThreads);
     ~NDPluginDriver();
 
     /* These are the methods that we override from asynNDArrayDriver */
@@ -66,22 +73,22 @@ public:
                                         size_t nElements, size_t *nIn);
                                      
     /* These are the methods that are new to this class */
-    virtual void driverCallback(asynUser *pasynUser, void *genericPointer);
     virtual void run(void);
     virtual asynStatus start(void);
     void sortingTask();
 
 protected:
-    virtual void processCallbacks(NDArray *pArray) = 0;
-    virtual void beginProcessCallbacks(NDArray *pArray);
-    virtual asynStatus endProcessCallbacks(NDArray *pArray, bool copyArray=false, bool readAttributes=true);
-    virtual asynStatus connectToArrayPort(void);    
-    virtual asynStatus setArrayInterrupt(int connect);
+    virtual void processCallbacks(NDArrayConstPtr pArray) = 0;
+    virtual void beginProcessCallbacks(NDArrayConstPtr pArray);
+    virtual asynStatus endProcessCallbacks(NDArrayConstPtr pArray, bool copyArray=false, bool readAttributes=true);
+    virtual asynStatus connectToArrayPort(void);
+    virtual asynStatus setArrayInterrupt(bool enableCallbacks);
 
 protected:
-    int NDPluginDriverArrayPort;
-    #define FIRST_NDPLUGIN_PARAM NDPluginDriverArrayPort
-    int NDPluginDriverArrayAddr;
+    int NDPluginDriverArrayPv;
+    #define FIRST_NDPLUGIN_PARAM NDPluginDriverArrayPv
+    int NDPluginDriverArrayConnected;
+    int NDPluginDriverArrayOverruns;
     int NDPluginDriverPluginType;
     int NDPluginDriverDroppedArrays;
     int NDPluginDriverQueueSize;
@@ -100,34 +107,53 @@ protected:
     int NDPluginDriverExecutionTime;
     int NDPluginDriverMinCallbackTime;
 
-    NDArray *pPrevInputArray_;
+    NDArrayConstPtr pPrevInputArray_;
 
 private:
+    virtual void driverCallback(asynUser *pasynUser, NDArrayConstPtr pArray);
     void processTask();
     asynStatus createCallbackThreads();
     asynStatus startCallbackThreads();
     asynStatus deleteCallbackThreads();
     asynStatus createSortingThread();
-     
-    /* The asyn interfaces we access as a client */
-    void *asynGenericPointerInterruptPvt_;
+
+    // Implemented for pvData::Requester
+    std::string getRequesterName (void);
+    void message (std::string const & message, epics::pvData::MessageType messageType);
+
+    // Implemented for pvAccess::ChannelRequester
+    void channelCreated (const epics::pvData::Status& status,
+            epics::pvAccess::Channel::shared_pointer const & channel);
+    void channelStateChange (epics::pvAccess::Channel::shared_pointer const & channel,
+            epics::pvAccess::Channel::ConnectionState state);
+
+    // Implemented for pvData::MonitorRequester
+    void monitorConnect (epics::pvData::Status const & status,
+            epics::pvData::MonitorPtr const & monitor,
+            epics::pvData::StructureConstPtr const & structure);
+    void monitorEvent (epics::pvData::MonitorPtr const & monitor);
+    void unlisten (epics::pvData::MonitorPtr const & monitor);
 
     /* Our data */
     int numThreads_;
     bool pluginStarted_;
     bool firstOutputArray_;
-    asynUser *pasynUserGenericPointer_;          /**< asynUser for connecting to NDArray driver */
-    void *asynGenericPointerPvt_;                /**< Handle for connecting to NDArray driver */
-    asynGenericPointer *pasynGenericPointer_;    /**< asyn interface for connecting to NDArray driver */
     bool connectedToArrayPort_;
-    std::vector<epicsThread*>pThreads_;
+    std::vector<epicsThread*> pThreads_;
     epicsMessageQueue *pToThreadMsgQ_;
     epicsMessageQueue *pFromThreadMsgQ_;
     std::multiset<sortedListElement> sortedNDArrayList_;
     int prevUniqueId_;
     epicsThreadId sortingThreadId_;
-    epicsTimeStamp lastProcessTime_;
+    epics::pvData::TimeStamp lastProcessTime_;
     int dimsPrev_[ND_ARRAY_MAX_DIMS];
+    bool gotFirst_;
+    epics::pvAccess::ChannelProvider::shared_pointer provider_;
+    epics::pvAccess::Channel::shared_pointer channel_;
+    epics::pvData::MonitorPtr monitor_;
+    epicsMessageQueueId msgQId_;
+    std::deque<NDArrayConstPtr> queue_;
+    std::tr1::shared_ptr<NDPluginDriver> thisPtr_;
 };
 
     

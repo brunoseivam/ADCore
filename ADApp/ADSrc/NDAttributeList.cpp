@@ -12,38 +12,77 @@
 
 #include "NDAttributeList.h"
 
+#include <pv/pvIntrospect.h>
+#include <pv/ntndarrayAttribute.h>
+
+using std::string;
+using std::pair;
+using std::map;
+using std::tr1::const_pointer_cast;
+
+using namespace epics::nt;
+using namespace epics::pvData;
+
+static const PVDataCreatePtr PVDC = getPVDataCreate();
+
 /** NDAttributeList constructor
+ *  Creates empty backing array
   */
 NDAttributeList::NDAttributeList()
+: array_(PVDC->createPVStructureArray(NDAttribute::builder->create()->getPVStructure()->getStructure())),
+  map_()
 {
-  ellInit(&this->list_);
-  this->lock_ = epicsMutexCreate();
+}
+
+/** NDAttributeList constructor
+  * Use existing array as backing array
+  */
+NDAttributeList::NDAttributeList(PVStructureArrayPtr const & array)
+: array_(array), map_()
+{
+    Lock lock(mutex_);
+
+    PVStructureArray::const_svector vec(array_->view());
+    PVStructureArray::const_svector::const_iterator it;
+
+    for(it = vec.cbegin(); it != vec.cend(); ++it)
+    {
+        NTNDArrayAttributePtr ntAttribute(NTNDArrayAttribute::wrap(*it));
+        NDAttributePtr attribute(new NDAttribute(ntAttribute));
+        map_.insert(std::pair<string, NDAttributePtr>(attribute->getName(), attribute));
+    }
 }
 
 /** NDAttributeList destructor
   */
 NDAttributeList::~NDAttributeList()
 {
-  this->clear();
-  ellFree(&this->list_);
-  epicsMutexDestroy(this->lock_);
 }
 
 /** Adds an attribute to the list.
   * If an attribute of the same name already exists then
-  * the existing attribute is deleted and replaced with the new one.
+  * the existing attribute is replaced with the new one.
   * \param[in] pAttribute A pointer to the attribute to add.
   */
-int NDAttributeList::add(NDAttribute *pAttribute)
+int NDAttributeList::add (NDAttributePtr const & pAttribute)
 {
-  //const char *functionName = "NDAttributeList::add";
+    //const char *functionName = "NDAttributeList::add";
 
-  epicsMutexLock(this->lock_);
-  /* Remove any existing attribute with this name */
-  this->remove(pAttribute->name_.c_str());
-  ellAdd(&this->list_, &pAttribute->listNode_.node);
-  epicsMutexUnlock(this->lock_);
-  return(ND_SUCCESS);
+    Lock lock(mutex_);
+
+    NDAttributePtr pExisting(find(pAttribute->getName()));
+
+    if(pExisting)
+        pAttribute->copy(pExisting);
+    else
+    {
+        PVStructureArray::svector vec(array_->reuse());
+        vec.push_back(pAttribute->getNTAttribute()->getPVStructure());
+        array_->replace(freeze(vec));
+        map_.insert(pair<string, NDAttributePtr>(pAttribute->getName(), pAttribute));
+    }
+
+    return(ND_SUCCESS);
 }
 
 /** Adds an attribute to the list.
@@ -56,198 +95,145 @@ int NDAttributeList::add(NDAttribute *pAttribute)
   * of the NDAttribute base class type, not derived class attributes.
   * To add attributes of a derived class to a list the NDAttributeList::add(NDAttribute*)
   * method must be used.
-  * \param[in] pName The name of the attribute to be added. 
-  * \param[in] pDescription The description of the attribute.
+  * \param[in] name The name of the attribute to be added.
+  * \param[in] description The description of the attribute.
   * \param[in] dataType The data type of the attribute.
   * \param[in] pValue A pointer to the value for this attribute.
   *
   */
-NDAttribute* NDAttributeList::add(const char *pName, const char *pDescription, NDAttrDataType_t dataType, void *pValue)
+NDAttributePtr NDAttributeList::add(string const & name, string const & description,
+        NDAttrDataType_t dataType, void *pValue)
 {
-  //const char *functionName = "NDAttributeList::add";
-  NDAttribute *pAttribute;
-
-  epicsMutexLock(this->lock_);
-  pAttribute = this->find(pName);
-  if (pAttribute) {
-    pAttribute->setValue(pValue);
-  } else {
-    pAttribute = new NDAttribute(pName, pDescription, NDAttrSourceDriver, "Driver", dataType, pValue);
-    ellAdd(&this->list_, &pAttribute->listNode_.node);
-  }
-  epicsMutexUnlock(this->lock_);
-  return(pAttribute);
+    //const char *functionName = "NDAttributeList::add";
+    NDAttributePtr pAttribute(new NDAttribute(name, description, NDAttrSourceDriver, "Driver", dataType, pValue));
+    add(pAttribute);
+    return pAttribute;
 }
-
-
 
 /** Finds an attribute by name; the search is now case sensitive (R1-10)
-  * \param[in] pName The name of the attribute to be found.
+  * \param[in] name The name of the attribute to be found.
   * \return Returns a pointer to the attribute if found, NULL if not found. 
   */
-NDAttribute* NDAttributeList::find(const char *pName)
+NDAttributePtr NDAttributeList::find(string const & name)
 {
-  NDAttribute *pAttribute;
-  NDAttributeListNode *pListNode;
-  //const char *functionName = "NDAttributeList::find";
-
-  epicsMutexLock(this->lock_);
-  pListNode = (NDAttributeListNode *)ellFirst(&this->list_);
-  while (pListNode) {
-    pAttribute = pListNode->pNDAttribute;
-    if (pAttribute->name_ == pName) goto done;
-    pListNode = (NDAttributeListNode *)ellNext(&pListNode->node);
-  }
-  pAttribute = NULL;
-
-  done:
-  epicsMutexUnlock(this->lock_);
-  return(pAttribute);
+    return const_pointer_cast<NDAttribute>(static_cast<const NDAttributeList*>(this)->find(name));
 }
 
-/** Finds the next attribute in the linked list of attributes.
-  * \param[in] pAttributeIn A pointer to the previous attribute in the list; 
-  * if NULL the first attribute in the list is returned.
-  * \return Returns a pointer to the next attribute if there is one, 
-  * NULL if there are no more attributes in the list. */
-NDAttribute* NDAttributeList::next(NDAttribute *pAttributeIn)
+NDAttributeConstPtr NDAttributeList::find(string const & name) const
 {
-  NDAttribute *pAttribute=NULL;
-  NDAttributeListNode *pListNode;
-  //const char *functionName = "NDAttributeList::next";
+    Lock lock(mutex_);
 
-  epicsMutexLock(this->lock_);
-  if (!pAttributeIn) {
-    pListNode = (NDAttributeListNode *)ellFirst(&this->list_);
-   }
-  else {
-    pListNode = (NDAttributeListNode *)ellNext(&pAttributeIn->listNode_.node);
-  }
-  if (pListNode) pAttribute = pListNode->pNDAttribute;
-  epicsMutexUnlock(this->lock_);
-  return(pAttribute);
+    std::map<string, NDAttributePtr>::const_iterator it = map_.find(name);
+
+    if(it == map_.end())
+        return NDAttributeConstPtr();
+
+    return it->second;
 }
 
 /** Returns the total number of attributes in the list of attributes.
   * \return Returns the number of attributes. */
-int NDAttributeList::count()
+size_t NDAttributeList::count() const
 {
-  //const char *functionName = "NDAttributeList::count";
-
-  return ellCount(&this->list_);
+    //const char *functionName = "NDAttributeList::count";
+    return array_->view().size();
 }
 
 /** Removes an attribute from the list.
-  * \param[in] pName The name of the attribute to be deleted.
+  * \param[in] name The name of the attribute to be deleted.
   * \return Returns ND_SUCCESS if the attribute was found and deleted, ND_ERROR if the
   * attribute was not found. */
-int NDAttributeList::remove(const char *pName)
+int NDAttributeList::remove(string const & name)
 {
-  NDAttribute *pAttribute;
-  int status = ND_ERROR;
-  //const char *functionName = "NDAttributeList::remove";
+    //const char *functionName = "NDAttributeList::remove";
 
-  epicsMutexLock(this->lock_);
-  pAttribute = this->find(pName);
-  if (!pAttribute) goto done;
-  ellDelete(&this->list_, &pAttribute->listNode_.node);
-  delete pAttribute;
-  status = ND_SUCCESS;
+    Lock lock(mutex_);
 
-  done:
-  epicsMutexUnlock(this->lock_);
-  return(status);
+    PVStructureArray::svector vec(array_->reuse());
+    PVStructureArray::svector::iterator it;
+
+    for(it = vec.begin(); it != vec.end(); ++it)
+    {
+        NTNDArrayAttributePtr ntAttribute(NTNDArrayAttribute::wrap(*it));
+        NDAttributePtr attribute(new NDAttribute(ntAttribute));
+        if(attribute->getName() == name)
+        {
+            // Shared vector doesn't implement erase... So swap with last (screws order, but it is efficient)
+            std::swap(*it, vec.back());
+            vec.pop_back();
+            array_->replace(freeze(vec));
+            map_.erase(map_.find(name));
+            return ND_SUCCESS;
+        }
+    }
+    return ND_ERROR;
 }
 
 /** Deletes all attributes from the list. */
 int NDAttributeList::clear()
 {
-  NDAttribute *pAttribute;
-  NDAttributeListNode *pListNode;
-  //const char *functionName = "NDAttributeList::clear";
+    //const char *functionName = "NDAttributeList::clear";
 
-  epicsMutexLock(this->lock_);
-  pListNode = (NDAttributeListNode *)ellFirst(&this->list_);
-  while (pListNode) {
-    pAttribute = pListNode->pNDAttribute;
-    ellDelete(&this->list_, &pListNode->node);
-    delete pAttribute;
-    pListNode = (NDAttributeListNode *)ellFirst(&this->list_);
-  }
-  epicsMutexUnlock(this->lock_);
-  return(ND_SUCCESS);
+    Lock lock(mutex_);
+    PVStructureArray::svector vec(array_->reuse());
+    map_.clear();
+    return ND_SUCCESS;
 }
 
 /** Copies all attributes from one attribute list to another.
   * It is efficient so that if the attribute already exists in the output
   * list it just copies the properties, and memory allocation is minimized.
   * The attributes are added to any existing attributes already present in the output list.
-  * \param[out] pListOut A pointer to the output attribute list to copy to.
+  * \param[out] pListOut A reference to the output attribute list to copy to.
   */
-int NDAttributeList::copy(NDAttributeList *pListOut)
+int NDAttributeList::copy(NDAttributeListPtr & pListOut) const
 {
-  NDAttribute *pAttrIn, *pAttrOut, *pFound;
-  NDAttributeListNode *pListNode;
-  //const char *functionName = "NDAttributeList::copy";
+    //const char *functionName = "NDAttributeList::copy";
 
-  epicsMutexLock(this->lock_);
-  pListNode = (NDAttributeListNode *)ellFirst(&this->list_);
-  while (pListNode) {
-    pAttrIn = pListNode->pNDAttribute;
-    /* See if there is already an attribute of this name in the output list */
-    pFound = pListOut->find(pAttrIn->name_.c_str());
-    /* The copy function will copy the properties, and will create the attribute if pFound is NULL */
-    pAttrOut = pAttrIn->copy(pFound);
-    /* If pFound is NULL, then a copy created a new attribute, need to add it to the list */
-    if (!pFound) pListOut->add(pAttrOut);
-    pListNode = (NDAttributeListNode *)ellNext(&pListNode->node);
-  }
-  epicsMutexUnlock(this->lock_);
-  return(ND_SUCCESS);
+    Lock lock(mutex_);
+
+    map<string, NDAttributePtr>::const_iterator it;
+
+    for(it = map_.begin(); it != map_.end(); ++it)
+        pListOut->add(it->second);
+
+    return ND_SUCCESS;
 }
 
 /** Updates all attribute values in the list; calls NDAttribute::updateValue() for each attribute in the list.
   */
 int NDAttributeList::updateValues()
 {
-  NDAttribute *pAttribute;
-  NDAttributeListNode *pListNode;
-  //const char *functionName = "NDAttributeList::updateValues";
+    Lock lock(mutex_);
+    map<string, NDAttributePtr>::iterator it;
 
-  epicsMutexLock(this->lock_);
-  pListNode = (NDAttributeListNode *)ellFirst(&this->list_);
-  while (pListNode) {
-    pAttribute = pListNode->pNDAttribute;
-    pAttribute->updateValue();
-    pListNode = (NDAttributeListNode *)ellNext(&pListNode->node);
-  }
-  epicsMutexUnlock(this->lock_);
-  return(ND_SUCCESS);
+    for(it = map_.begin(); it != map_.end(); ++it)
+        it->second->updateValue();
+
+    return ND_SUCCESS;
 }
 
 /** Reports on the properties of the attribute list.
   * \param[in] fp File pointer for the report output.
   * \param[in] details Level of report details desired; if >10 calls NDAttribute::report() for each attribute.
   */
-int NDAttributeList::report(FILE *fp, int details)
+int NDAttributeList::report(FILE *fp, int details) const
 {
-  NDAttribute *pAttribute;
-  NDAttributeListNode *pListNode;
-  
-  epicsMutexLock(this->lock_);
-  fprintf(fp, "\n");
-  fprintf(fp, "NDAttributeList: address=%p:\n", this);
-  fprintf(fp, "  number of attributes=%d\n", this->count());
-  if (details > 10) {
-    pListNode = (NDAttributeListNode *) ellFirst(&this->list_);
-    while (pListNode) {
-      pAttribute = (NDAttribute *)pListNode->pNDAttribute;
-      pAttribute->report(fp, details);
-      pListNode = (NDAttributeListNode *) ellNext(&pListNode->node);
+    Lock lock(mutex_);
+    fprintf(fp, "\n");
+    fprintf(fp, "NDAttributeList: address=%p:\n", this);
+    fprintf(fp, "  number of attributes=%lu\n", this->count());
+    if (details > 10)
+    {
+        map<string, NDAttributePtr>::const_iterator it;
+
+        for(it = map_.begin(); it != map_.end(); ++it)
+            it->second->report(fp, details);
     }
-  }
-  epicsMutexUnlock(this->lock_);
-  return ND_SUCCESS;
+    return ND_SUCCESS;
 }
 
-
+map<string, NDAttributePtr> const & NDAttributeList::getMap() const
+{
+    return map_;
+}

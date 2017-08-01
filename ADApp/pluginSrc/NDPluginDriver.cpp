@@ -22,18 +22,21 @@
 
 #include <asynDriver.h>
 
+#include <pv/clientFactory.h>
+
 #include <epicsExport.h>
 #include "NDPluginDriver.h"
+
+using namespace std;
+using namespace epics::pvData;
+using namespace epics::pvAccess;
+using namespace epics::pvDatabase;
+using namespace epics::nt;
 
 typedef enum {
     ToThreadMessageData,
     ToThreadMessageExit
 } ToThreadMessageType_t;
-
-typedef struct {
-    ToThreadMessageType_t messageType;
-    NDArray *pArray;    
-} ToThreadMessage_t;
 
 typedef enum {
     FromThreadMessageEnter,
@@ -47,7 +50,7 @@ typedef struct {
 
 static const char *driverName="NDPluginDriver";
 
-sortedListElement::sortedListElement(NDArray *pArray, epicsTimeStamp time)
+sortedListElement::sortedListElement(NDArrayConstPtr pArray, TimeStamp time)
     : pArray_(pArray), insertionTime_(time) {}
 
 static void sortingTaskC(void *drvPvt)
@@ -84,46 +87,37 @@ static void sortingTaskC(void *drvPvt)
   *            This value should also be used for any other threads this object creates.
   * \param[in] maxThreads The maximum number of threads this plugin is allowed to use.
   */
-NDPluginDriver::NDPluginDriver(const char *portName, int queueSize, int blockingCallbacks, 
-                               const char *NDArrayPort, int NDArrayAddr, int maxAddr,
-                               int maxBuffers, size_t maxMemory, int interfaceMask, int interruptMask,
-                               int asynFlags, int autoConnect, int priority, int stackSize, int maxThreads)
+NDPluginDriver::NDPluginDriver(const char *portName, string const & pvName, int queueSize, int blockingCallbacks,
+                               string const & ndArrayPv, int maxAddr, int maxBuffers, size_t maxMemory,
+                               int interfaceMask, int interruptMask, int asynFlags, int autoConnect, int priority,
+                               int stackSize, int maxThreads)
 
-    : asynNDArrayDriver(portName, maxAddr, maxBuffers, maxMemory,
+    : asynNDArrayDriver(portName, pvName, maxAddr, maxBuffers, maxMemory,
           interfaceMask | asynInt32Mask | asynFloat64Mask | asynOctetMask | asynInt32ArrayMask | asynDrvUserMask,
           interruptMask | asynInt32Mask | asynFloat64Mask | asynOctetMask | asynInt32ArrayMask,
           asynFlags, autoConnect, priority, stackSize),
-    pPrevInputArray_(0),
     pluginStarted_(false),
     firstOutputArray_(true),
+    connectedToArrayPort_(false),
     pToThreadMsgQ_(NULL),
     pFromThreadMsgQ_(NULL),
     prevUniqueId_(-1000),
-    sortingThreadId_(0)  
+    sortingThreadId_(0),
+    gotFirst_(false),
+    thisPtr_(tr1::shared_ptr<NDPluginDriver>(this))
 {
-    asynUser *pasynUser;
     //static const char *functionName = "NDPluginDriver";
     
     lock();
     
     /* Initialize some members to 0 */
-    memset(&this->lastProcessTime_, 0, sizeof(this->lastProcessTime_));
-    memset(&this->dimsPrev_, 0, sizeof(this->dimsPrev_));
-    this->pasynGenericPointer_ = NULL;
-    this->asynGenericPointerPvt_ = NULL;
-    this->asynGenericPointerInterruptPvt_ = NULL;
-    this->connectedToArrayPort_ = false;
+    //memset(&this->dimsPrev_, 0, sizeof(this->dimsPrev_));
     
     if (maxThreads < 1) maxThreads = 1;
-    
-    /* Create asynUser for communicating with NDArray port */
-    pasynUser = pasynManager->createAsynUser(0, 0);
-    pasynUser->userPvt = this;
-    this->pasynUserGenericPointer_ = pasynUser;
-    this->pasynUserGenericPointer_->reason = NDArrayData;
 
-    createParam(NDPluginDriverArrayPortString,         asynParamOctet, &NDPluginDriverArrayPort);
-    createParam(NDPluginDriverArrayAddrString,         asynParamInt32, &NDPluginDriverArrayAddr);
+    createParam(NDPluginDriverArrayPvString,           asynParamOctet, &NDPluginDriverArrayPv);
+    createParam(NDPluginDriverArrayConnectedString,    asynParamInt32, &NDPluginDriverArrayConnected);
+    createParam(NDPluginDriverArrayOverrunsString,     asynParamInt32, &NDPluginDriverArrayOverruns);
     createParam(NDPluginDriverPluginTypeString,        asynParamOctet, &NDPluginDriverPluginType);
     createParam(NDPluginDriverDroppedArraysString,     asynParamInt32, &NDPluginDriverDroppedArrays);
     createParam(NDPluginDriverQueueSizeString,         asynParamInt32, &NDPluginDriverQueueSize);
@@ -148,8 +142,7 @@ NDPluginDriver::NDPluginDriver(const char *portName, int queueSize, int blocking
      * the driver with no error during initialization then it sets the output record to that value.  
      * If a value is not set here then the read request will return an error (uninitialized).
      * Values set here will be overridden by values from save/restore if they exist. */
-    setStringParam (NDPluginDriverArrayPort, NDArrayPort);
-    setIntegerParam(NDPluginDriverArrayAddr, NDArrayAddr);
+    setStringParam (NDPluginDriverArrayPv, ndArrayPv);
     setIntegerParam(NDPluginDriverDroppedArrays, 0);
     setIntegerParam(NDPluginDriverDroppedOutputArrays, 0);
     setIntegerParam(NDPluginDriverQueueSize, queueSize);
@@ -157,14 +150,18 @@ NDPluginDriver::NDPluginDriver(const char *portName, int queueSize, int blocking
     setIntegerParam(NDPluginDriverMaxThreads, maxThreads);
     setIntegerParam(NDPluginDriverNumThreads, 1);
     setIntegerParam(NDPluginDriverBlockingCallbacks, blockingCallbacks);
-    
+
+    // Start pvAccess client factory
+    ClientFactory::start();
+    provider_ = ChannelProviderRegistry::clients()->getProvider("pva");
+
     /* Create the callback threads, unless blocking callbacks are disabled with
      * the blockingCallbacks argument here. Even then, if they are enabled
      * subsequently, we will create the threads then. */
     if (!blockingCallbacks) {
         createCallbackThreads();
     }
-    
+
     unlock();
 }
 
@@ -187,47 +184,55 @@ NDPluginDriver::~NDPluginDriver()
   * This method takes care of some bookkeeping for callbacks, updating parameters
   * from data in the class and in the NDArray.  It does asynInt32Array callbacks
   * for the dimensions array if the dimensions of the NDArray data have changed. */ 
-    void NDPluginDriver::beginProcessCallbacks(NDArray *pArray)
+void NDPluginDriver::beginProcessCallbacks(NDArrayConstPtr pArray)
 {
-    int arrayCounter;
-    int i, dimsChanged;
-    int size;
-    NDAttribute *pAttribute;
-    int colorMode=NDColorModeMono, bayerPattern=NDBayerRGGB;
     //static const char *functionName="beginProcessCallbacks";
+    int colorMode=NDColorModeMono, bayerPattern=NDBayerRGGB;
 
-    pAttribute = pArray->pAttributeList->find("ColorMode");
-    if (pAttribute) pAttribute->getValue(NDAttrInt32, &colorMode);
-    pAttribute = pArray->pAttributeList->find("BayerPattern");
-    if (pAttribute) pAttribute->getValue(NDAttrInt32, &bayerPattern);
-    
+    NDAttributeConstPtr colorAttr(pArray->viewAttributeList()->find("ColorMode"));
+    if(colorAttr)
+        colorAttr->getValue(NDAttrInt32, &colorMode);
+
+    NDAttributeConstPtr bayerAttr(pArray->viewAttributeList()->find("BayerPattern"));
+    if(bayerAttr)
+        bayerAttr->getValue(NDAttrInt32, &bayerPattern);
+
+    int arrayCounter;
     getIntegerParam(NDArrayCounter, &arrayCounter);
-    arrayCounter++;
-    setIntegerParam(NDArrayCounter, arrayCounter);
-    setIntegerParam(NDNDimensions, pArray->ndims);
-    setIntegerParam(NDDataType, pArray->dataType);
+    setIntegerParam(NDArrayCounter, arrayCounter + 1);
+    setIntegerParam(NDNDimensions, pArray->getDimensions().size());
+    setIntegerParam(NDDataType, pArray->getDataType());
     setIntegerParam(NDColorMode, colorMode);
     setIntegerParam(NDBayerPattern, bayerPattern);
-    setIntegerParam(NDUniqueId, pArray->uniqueId);
-    setTimeStamp(&pArray->epicsTS);
-    setDoubleParam(NDTimeStamp, pArray->timeStamp);
-    setIntegerParam(NDEpicsTSSec, pArray->epicsTS.secPastEpoch);
-    setIntegerParam(NDEpicsTSNsec, pArray->epicsTS.nsec);
+    setIntegerParam(NDUniqueId, pArray->getUniqueId());
+
+    epicsTimeStamp epicsTS;
+    epicsTS.secPastEpoch = pArray->getEpicsTimeStamp().getSecondsPastEpoch();
+    epicsTS.nsec = pArray->getEpicsTimeStamp().getNanoseconds();
+
+    setTimeStamp(&epicsTS);
+    setDoubleParam(NDTimeStamp, pArray->getTimeStamp().toSeconds());
+    setIntegerParam(NDEpicsTSSec, epicsTS.secPastEpoch);
+    setIntegerParam(NDEpicsTSNsec, epicsTS.nsec);
+
     /* See if the array dimensions have changed.  If so then do callbacks on them. */
-    for (i=0, dimsChanged=0; i<ND_ARRAY_MAX_DIMS; i++) {
-        size = (int)pArray->dims[i].size;
-        if (i >= pArray->ndims) size = 0;
-        if (size != this->dimsPrev_[i]) {
+    vector<NDDimension_t> dims = pArray->getDimensions();
+    bool dimsChanged = false;
+    for (size_t i = 0; i < ND_ARRAY_MAX_DIMS; i++)
+    {
+        int size = i < dims.size() ? dims[i].size : 0;
+
+        if (size != this->dimsPrev_[i])
+        {
             this->dimsPrev_[i] = size;
-            dimsChanged = 1;
+            dimsChanged = true;
         }
     }
-    if (dimsChanged) {
+
+    if (dimsChanged)
         doCallbacksInt32Array(this->dimsPrev_, ND_ARRAY_MAX_DIMS, NDDimensions, 0);
-    }
+
     // Save a pointer to the input array for use by ProcessPlugin
-    if (pPrevInputArray_) pPrevInputArray_->release();
-    pArray->reserve();
     pPrevInputArray_ = pArray;
 }
 
@@ -242,32 +247,31 @@ NDPluginDriver::~NDPluginDriver()
   * If SortMode is sorted it inserts the NDArray into the std::multilist for callbacks in SortThread(). 
   * It keeps track of DisorderedArrays and DroppedOutputArrays. 
   * It caches the most recent NDArray in pArrays[0]. */ 
-asynStatus NDPluginDriver::endProcessCallbacks(NDArray *pArray, bool copyArray, bool readAttributes)
+asynStatus NDPluginDriver::endProcessCallbacks(NDArrayConstPtr pArray, bool copyArray, bool readAttributes)
 {
-    int arrayCallbacks;
-    int callbacksSorted;
-    NDArray *pArrayOut = pArray;
+    NDArrayConstPtr pArrayOut(pArray);
     static const char *functionName = "endProcessCallbacks";
 
+    int arrayCallbacks;
     getIntegerParam(NDArrayCallbacks, &arrayCallbacks);
     if (arrayCallbacks == 0) {
         // We don't do array callbacks but still want to cache the last array in pArrays[0]
-        // If this array has not been copied then we need to increase the reference count
-        if (copyArray) pArray->reserve();
-        if (this->pArrays[0]) this->pArrays[0]->release();
         this->pArrays[0] = pArray;
         return asynSuccess;
     }
 
+    int callbacksSorted;
     getIntegerParam(NDPluginDriverSortMode, &callbacksSorted);
     if (copyArray) {
-        pArrayOut = this->pNDArrayPool->copy(pArray, NULL, 1);
+        pArrayOut = NDArrayPool_.copy(pArray);
     }
-    if (NULL != pArrayOut) {
+    if (pArrayOut) {
         if (readAttributes) {
-            this->getAttributes(pArrayOut->pAttributeList);
+            //cout << *pArray->viewAttributeList() << endl;
+            //TODO: getAttributeList is not const...
+            //NDAttributeListPtr pOutAttrs(pArrayOut->getAttributeList());
+            //this->getAttributes(pOutAttrs);
         }
-        if (this->pArrays[0]) this->pArrays[0]->release();
         this->pArrays[0] = pArrayOut;
     }
     else {
@@ -286,21 +290,21 @@ asynStatus NDPluginDriver::endProcessCallbacks(NDArray *pArray, bool copyArray, 
             getIntegerParam(NDPluginDriverDroppedOutputArrays, &droppedOutputArrays);
             asynPrint(pasynUserSelf, ASYN_TRACE_WARNING, 
                 "%s::%s std::multilist size exceeded, dropped array uniqueId=%d\n",
-                driverName, functionName, pArrayOut->uniqueId);
+                driverName, functionName, pArrayOut->getUniqueId());
             droppedOutputArrays++;
             setIntegerParam(NDPluginDriverDroppedOutputArrays, droppedOutputArrays);
         } else {
-            epicsTimeStamp now;
-            epicsTimeGetCurrent(&now);
-            pArrayOut->reserve();
+            TimeStamp now;
+            now.getCurrent();
             sortedListElement *pListElement = new sortedListElement(pArrayOut, now);
             sortedNDArrayList_.insert(*pListElement);
+            sortedNDArrayList_.insert(sortedListElement(pArrayOut, now));
         }
     } else {
         // See the comments about releasing the lock when calling doCallbacksGenericPointer above
-        doCallbacksGenericPointer(pArrayOut, NDArrayData, 0);
-        bool orderOK = (pArrayOut->uniqueId == prevUniqueId_)   ||
-                       (pArrayOut->uniqueId == prevUniqueId_+1);
+        NDArrayData->put(pArrayOut);
+        bool orderOK = (pArrayOut->getUniqueId() == prevUniqueId_)   ||
+                       (pArrayOut->getUniqueId() == prevUniqueId_+1);
         if (!firstOutputArray_ && !orderOK) {
             int disorderedArrays;
             getIntegerParam(NDPluginDriverDisorderedArrays, &disorderedArrays);
@@ -311,36 +315,24 @@ asynStatus NDPluginDriver::endProcessCallbacks(NDArray *pArray, bool copyArray, 
                 driverName, functionName, pArrayOut->uniqueId, prevUniqueId_, orderOK, disorderedArrays);
         }
         firstOutputArray_ = false;
-        prevUniqueId_ = pArrayOut->uniqueId;
+        prevUniqueId_ = pArrayOut->getUniqueId();
     }
     return asynSuccess;
 }
 
-
-extern "C" {static void driverCallback(void *drvPvt, asynUser *pasynUser, void *genericPointer)
-{
-    NDPluginDriver *pNDPluginDriver = (NDPluginDriver *)drvPvt;
-    pNDPluginDriver->driverCallback(pasynUser, genericPointer);
-}}
-
-/** Method that is called from the driver with a new NDArray.
+/** Method that is called from monitorEvent with a new NDArray.
   * It calls the processCallbacks function, which typically is implemented in the
   * derived class.
   * It can either do the callbacks directly (if NDPluginDriverBlockingCallbacks=1) or by queueing
   * the arrays to be processed by a background task (if NDPluginDriverBlockingCallbacks=0).
   * In the latter case arrays can be dropped if the queue is full.  This method should really
   * be private, but it must be called from a C-linkage callback function, so it must be public.
-  * \param[in] pasynUser  The pasynUser from the asyn client.
-  * \param[in] genericPointer The pointer to the NDArray */ 
-void NDPluginDriver::driverCallback(asynUser *pasynUser, void *genericPointer)
+  * \param[in] pArray The pointer to the NDArray */
+void NDPluginDriver::driverCallback (asynUser *pasynUser, NDArrayConstPtr pArray)
 {
-     
-    NDArray *pArray = (NDArray *)genericPointer;
-    epicsTimeStamp tNow, tEnd;
-    double minCallbackTime, deltaTime;
     int status=0;
-    int blockingCallbacks;
-    int droppedArrays, queueSize, queueFree;
+    double minCallbackTime;
+    int blockingCallbacks, queueSize;
     bool ignoreQueueFull = false;
     static const char *functionName = "driverCallback";
 
@@ -350,8 +342,10 @@ void NDPluginDriver::driverCallback(asynUser *pasynUser, void *genericPointer)
     status |= getIntegerParam(NDPluginDriverBlockingCallbacks, &blockingCallbacks);
     status |= getIntegerParam(NDPluginDriverQueueSize, &queueSize);
     
-    epicsTimeGetCurrent(&tNow);
-    deltaTime = epicsTimeDiffInSeconds(&tNow, &this->lastProcessTime_);
+    TimeStamp tNow;
+    tNow.getCurrent();
+
+    double deltaTime = TimeStamp::diff(tNow, lastProcessTime_);
 
     if ((minCallbackTime == 0.) || (deltaTime > minCallbackTime)) {
         if (pasynUser->auxStatus == asynOverflow) ignoreQueueFull = true;
@@ -365,34 +359,35 @@ void NDPluginDriver::driverCallback(asynUser *pasynUser, void *genericPointer)
          * If non-blocking we put the array on the queue and it executes
          * in our background thread. */
         /* Update the time we last posted an array */
-        epicsTimeGetCurrent(&tNow);
-        memcpy(&this->lastProcessTime_, &tNow, sizeof(tNow));
+        tNow.getCurrent();
+        lastProcessTime_ = tNow;
+
         if (blockingCallbacks) {
             processCallbacks(pArray);
-            epicsTimeGetCurrent(&tEnd);
-            setDoubleParam(NDPluginDriverExecutionTime, epicsTimeDiffInSeconds(&tEnd, &tNow)*1e3);
+            TimeStamp tEnd;
+            tEnd.getCurrent();
+            setDoubleParam(NDPluginDriverExecutionTime, TimeStamp::diff(tEnd, tNow)*1e3);
         } else {
-            /* Increase the reference count again on this array
-             * It will be released in the background task when processing is done */
-            pArray->reserve();
             /* Try to put this array on the message queue.  If there is no room then return
              * immediately. */
-            ToThreadMessage_t msg = {ToThreadMessageData, pArray};
+            ToThreadMessageType_t msg = ToThreadMessageData;
+            queue_.push_back(pArray);
             status = pToThreadMsgQ_->trySend(&msg, sizeof(msg));
-            queueFree = queueSize - pToThreadMsgQ_->pending();
+            int queueFree = queueSize - pToThreadMsgQ_->pending();
             setIntegerParam(NDPluginDriverQueueFree, queueFree);
+
             if (status) {
+                queue_.pop_back();
                 pasynUser->auxStatus = asynOverflow;
                 if (!ignoreQueueFull) {
+                    int droppedArrays;
                     status |= getIntegerParam(NDPluginDriverDroppedArrays, &droppedArrays);
                     asynPrint(pasynUser, ASYN_TRACE_FLOW, 
                         "%s::%s message queue full, dropped array uniqueId=%d\n",
-                        driverName, functionName, pArray->uniqueId);
+                        driverName, functionName, pArray->getUniqueId());
                     droppedArrays++;
                     status |= setIntegerParam(NDPluginDriverDroppedArrays, droppedArrays);
                 }
-                /* This buffer needs to be released */
-                pArray->release();
             }
         }
     }
@@ -408,12 +403,7 @@ void NDPluginDriver::driverCallback(asynUser *pasynUser, void *genericPointer)
 void NDPluginDriver::processTask()
 {
     /* This thread processes a new array when it arrives */
-    int queueSize, queueFree;
-    epicsTimeStamp tStart, tEnd;
-    int numBytes;
     int status;
-    NDArray *pArray=0;
-    ToThreadMessage_t toMsg;
     FromThreadMessage_t fromMsg = {FromThreadMessageEnter, epicsThreadGetIdSelf()};
     static const char *functionName = "processTask";
 
@@ -424,19 +414,22 @@ void NDPluginDriver::processTask()
             "%s::%s error sending enter message thread %s\n",
             driverName, functionName, epicsThreadGetNameSelf());
     }
-    this->lock();
-    /* Loop forever */
-    while (1) {
 
+    lock();
+
+    /* Loop forever */
+    while(1) {
         /* Wait for an array to arrive from the queue. Release the lock while  waiting. */
-        this->unlock();   
-        numBytes = pToThreadMsgQ_->receive(&toMsg, sizeof(toMsg));
+        unlock();
+        ToThreadMessageType_t toMsg;
+        int numBytes = pToThreadMsgQ_->receive(&toMsg, sizeof(toMsg));
+
         if (numBytes != sizeof(toMsg)) {
             asynPrint(pasynUserSelf, ASYN_TRACE_ERROR, 
                 "%s::%s error reading message queue, expected size=%d, actual=%d\n",
                 driverName, functionName, (int)sizeof(toMsg), numBytes);
         }
-        switch (toMsg.messageType) {
+        switch (toMsg) {
             case ToThreadMessageExit:
                 asynPrint(pasynUserSelf, ASYN_TRACE_FLOW, 
                     "%s::%s received exit message, thread=%s\n", 
@@ -444,72 +437,67 @@ void NDPluginDriver::processTask()
                 fromMsg.messageType = FromThreadMessageExit;
                 pFromThreadMsgQ_->send(&fromMsg, sizeof(fromMsg));
                 return; // shutdown thread if special message
-                break;
             case ToThreadMessageData:
-                pArray = toMsg.pArray;
-                break;
+                break;  // get array from deque further on, with lock taken
             default:
                 asynPrint(pasynUserSelf, ASYN_TRACE_ERROR, 
                     "%s::%s unknown message type = %d\n",
-                    driverName, functionName, toMsg.messageType);
+                    driverName, functionName, toMsg);
+                continue;
         }
         
-        // Note: the lock must not be taken until after the thread exit logic above    
-        this->lock();
-        epicsTimeGetCurrent(&tStart);
+        // Note: the lock must not be taken until after the thread exit logic above
+        lock();
+        NDArrayConstPtr pArray(queue_.front());
+        queue_.pop_front();
+
+        TimeStamp tStart;
+        tStart.getCurrent();
+
+        int queueSize;
         getIntegerParam(NDPluginDriverQueueSize, &queueSize);
-        queueFree = queueSize - pToThreadMsgQ_->pending();
+        int queueFree = queueSize - pToThreadMsgQ_->pending();
         setIntegerParam(NDPluginDriverQueueFree, queueFree);
 
         /* Call the function that does the business of this callback.
          * This function should release the lock during time-consuming operations,
          * but of course it must not access any class data when the lock is released. */
         processCallbacks(pArray); 
-        
-        /* We are done with this array buffer */
-        pArray->release();
-        epicsTimeGetCurrent(&tEnd);
-        setDoubleParam(NDPluginDriverExecutionTime, epicsTimeDiffInSeconds(&tEnd, &tStart)*1e3);
+
+        TimeStamp tEnd;
+        tEnd.getCurrent();
+        setDoubleParam(NDPluginDriverExecutionTime, TimeStamp::diff(tEnd, tStart)*1e3);
         callParamCallbacks();
     }
 }
 
-/** Register or unregister to receive asynGenericPointer (NDArray) callbacks from the driver.
+/** Register or unregister to receive monitor callbacks from the PV.
   * Note: this function must be called with the lock released, otherwise a deadlock can occur
   * in the call to cancelInterruptUser.
-  * \param[in] enableCallbacks 1 to enable callbacks, 0 to disable callbacks */ 
-asynStatus NDPluginDriver::setArrayInterrupt(int enableCallbacks)
+  * \param[in] enableCallbacks true to enable callbacks, false to disable callbacks */
+asynStatus NDPluginDriver::setArrayInterrupt(bool enableCallbacks)
 {
-    asynStatus status = asynSuccess;
-    static const char *functionName = "setArrayInterrupt";
-    
-    if (enableCallbacks && connectedToArrayPort_ && !this->asynGenericPointerInterruptPvt_) {
-        status = this->pasynGenericPointer_->registerInterruptUser(
-                    this->asynGenericPointerPvt_, this->pasynUserGenericPointer_,
-                    ::driverCallback, this, &this->asynGenericPointerInterruptPvt_);
-        if (status != asynSuccess) {
-            asynPrint(this->pasynUserSelf, ASYN_TRACE_ERROR,
-                "%s::%s ERROR: Can't register for interrupt callbacks on detector port: %s\n",
-                driverName, functionName, this->pasynUserGenericPointer_->errorMessage);
-            return(status);
-        }
-    } 
-    if (!enableCallbacks && connectedToArrayPort_ && this->asynGenericPointerInterruptPvt_) {
-        status = this->pasynGenericPointer_->cancelInterruptUser(this->asynGenericPointerPvt_, 
-                        this->pasynUserGenericPointer_, this->asynGenericPointerInterruptPvt_);
-        this->asynGenericPointerInterruptPvt_ = NULL;
-        if (status != asynSuccess) {
-            asynPrint(this->pasynUserSelf, ASYN_TRACE_ERROR,
-                "%s::%s ERROR: Can't unregister for interrupt callbacks on detector port: %s\n",
-                driverName, functionName, this->pasynUserGenericPointer_->errorMessage);
-            return(status);
-        }
+    const char *functionName = "setArrayInterrupt";
+
+    if(!monitor_)
+        return asynError;
+
+    gotFirst_ = false;
+    Status status = enableCallbacks ? monitor_->start() : monitor_->stop();
+
+    if(!status.isOK())
+    {
+        asynPrint(this->pasynUserSelf, ASYN_TRACE_ERROR,
+                "%s::%s(%d) ERROR: Failed to %s monitor: %s\n",
+                driverName, functionName, enableCallbacks,
+                enableCallbacks ? "start" : "stop", status.getMessage().c_str());
+        return asynError;
     }
-    return(asynSuccess);
+
+    return asynSuccess;
 }
 
-/** Connect this plugin to an NDArray port driver; disconnect from any existing driver first, register
-  * for callbacks if enabled. */
+/** Connect this plugin to an NTNDArray PV */
 asynStatus NDPluginDriver::connectToArrayPort(void)
 {
     asynStatus status;
@@ -518,47 +506,56 @@ asynStatus NDPluginDriver::connectToArrayPort(void)
     std::string arrayPort;
     int arrayAddr;
     static const char *functionName = "connectToArrayPort";
+    const char *functionName = "connectToArrayPort";
+
+    string pvName;
+    getStringParam(NDPluginDriverArrayPv, pvName);
 
     getStringParam(NDPluginDriverArrayPort, arrayPort);
     getIntegerParam(NDPluginDriverArrayAddr, &arrayAddr);
     getIntegerParam(NDPluginDriverEnableCallbacks, &enableCallbacks);
+    if(channel_ && channel_->getChannelName() == pvName)
+        return asynSuccess;
 
-    /* If we are currently connected to an array port cancel interrupt request */    
-    if (this->connectedToArrayPort_) {
-        status = setArrayInterrupt(0);
-    }
-    
-    /* Disconnect the array port from our asynUser.  Ignore error if there is no device
-     * currently connected. */
-    pasynManager->disconnect(this->pasynUserGenericPointer_);
-    this->connectedToArrayPort_ = false;
+    setArrayInterrupt(false);
 
     /* Connect to the array port driver */
     status = pasynManager->connectDevice(this->pasynUserGenericPointer_, arrayPort.c_str(), arrayAddr);
     if (status != asynSuccess) {
+    Channel::shared_pointer channel = provider_->createChannel(pvName, thisPtr_);
+    if(!channel)
+    {
         asynPrint(this->pasynUserSelf, ASYN_TRACE_ERROR,
                   "%s::%s Error calling pasynManager->connectDevice to array port %s address %d, status=%d, error=%s\n",
                   driverName, functionName, arrayPort.c_str(), arrayAddr, status, this->pasynUserGenericPointer_->errorMessage);
         return (status);
+                "%s::%s ERROR: Couldn't create channel for: %s\n",
+                driverName, functionName, pvName.c_str());
+        return asynError;
     }
 
-    /* Find the asynGenericPointer interface in that driver */
-    pasynInterface = pasynManager->findInterface(this->pasynUserGenericPointer_, asynGenericPointerType, 1);
-    if (!pasynInterface) {
+    MonitorPtr monitor(channel->createMonitor(thisPtr_,
+            CreateRequest::create()->createRequest("field()")));
+    if(!monitor)
+    {
         asynPrint(this->pasynUserSelf, ASYN_TRACE_ERROR,
                   "%s::connectToPort ERROR: Can't find asynGenericPointer interface on array port %s address %d\n",
                   driverName, arrayPort.c_str(), arrayAddr);
         return(asynError);
+                "%s::%s ERROR: Couldn't create monitor\n",
+                driverName, functionName);
+        return asynError;
     }
-    pasynGenericPointer_ = (asynGenericPointer *)pasynInterface->pinterface;
-    asynGenericPointerPvt_ = pasynInterface->drvPvt;
-    connectedToArrayPort_ = true;
 
-    /* Enable or disable interrupt callbacks */
-    status = setArrayInterrupt(enableCallbacks);
+    if(channel_)
+        channel_->destroy();
 
-    return(status);
-}   
+    gotFirst_ = false;
+    channel_ = channel;
+    monitor_ = monitor;
+
+    return asynSuccess;
+}
 
 /** Method runs as a separate thread, periodically doing NDArray callbacks to downstream plugins.
   * This thread is used when SortMode=1.
@@ -566,31 +563,33 @@ asynStatus NDPluginDriver::connectToArrayPort(void)
   * C-linkage callback function, so it must be public. */ 
 void NDPluginDriver::sortingTask()
 {
-    double sortTime;
-    epicsTimeStamp now;
-    int sortSize;
-    double deltaTime;
-    int listSize;
-    std::multiset<sortedListElement>::iterator pListElement;
     static const char *functionName = "sortingTask";
 
     lock();
     while (1) {
+        double sortTime;
         getDoubleParam(NDPluginDriverSortTime, &sortTime);
         unlock();
         epicsThreadSleep(sortTime);
         lock();
-        epicsTimeGetCurrent(&now);
+
+        TimeStamp now;
+        now.getCurrent();
+
+        int sortSize;
         getIntegerParam(NDPluginDriverSortSize, &sortSize);
+
+        int listSize;
         while ((listSize=(int)sortedNDArrayList_.size()) > 0) {
-            bool orderOK;
-            pListElement = sortedNDArrayList_.begin();
-            deltaTime = epicsTimeDiffInSeconds(&now, &pListElement->insertionTime_);
+            multiset<sortedListElement>::iterator pListElement = sortedNDArrayList_.begin();
+            double deltaTime = TimeStamp::diff(now, pListElement->insertionTime_);
+
             asynPrint(pasynUserSelf, ASYN_TRACEIO_DRIVER, 
                 "%s::%s, deltaTime=%f, list size=%d, uniqueId=%d\n", 
-                driverName, functionName, deltaTime, listSize, pListElement->pArray_->uniqueId);            
-            orderOK = (pListElement->pArray_->uniqueId == prevUniqueId_)   ||
-                      (pListElement->pArray_->uniqueId == prevUniqueId_+1);
+                driverName, functionName, deltaTime, listSize, pListElement->pArray_->getUniqueId());
+
+            bool orderOK = (pListElement->pArray_->getUniqueId() == prevUniqueId_) ||
+                      (pListElement->pArray_->getUniqueId() == prevUniqueId_+1);
             if ((!firstOutputArray_ && orderOK) || (deltaTime > sortTime)) {
                 // NOTE: we have been releasing the lock before calling doCallbacksGenericPointer because
                 // sometime in the distant past I thought I was getting deadlocks without doing so.
@@ -598,8 +597,12 @@ void NDPluginDriver::sortingTask()
                 // can get access to pArrays[0] when the lock is released and cause problems with the NDArrayPool.
                 // Keep the lock for now unless we find deadlock problems.
                 //this->unlock();
-                doCallbacksGenericPointer(pListElement->pArray_, NDArrayData, 0);
+                // TODO: fix this compiler error
+                NDArrayData->put(pListElement->pArray_);
                 //this->lock();
+
+                prevUniqueId_ = pListElement->pArray_->getUniqueId();
+                sortedNDArrayList_.erase(pListElement);
                 if (!firstOutputArray_ && !orderOK) {
                     int disorderedArrays;
                     getIntegerParam(NDPluginDriverDisorderedArrays, &disorderedArrays);
@@ -656,31 +659,12 @@ asynStatus NDPluginDriver::writeInt32(asynUser *pasynUser, epicsInt32 value)
      }
     
     if (function == NDPluginDriverEnableCallbacks) {
-        if (value) {  
-            /* We need to register to be called with interrupts from the detector driver on 
-             * the asynGenericPointer interface. Must do this with the lock released. */
-            this->unlock();
-            status = setArrayInterrupt(1);
-            this->lock();
-            if (status != asynSuccess) goto done;
-        } else {
-            this->unlock();
-            status = setArrayInterrupt(0);
-            this->lock();
-            if (status != asynSuccess) goto done;
-            // Release the input NDArray
-            if (pPrevInputArray_) {
-                pPrevInputArray_->release();
-                pPrevInputArray_ = 0;
-            }
-        }
-
-    } else if (function == NDPluginDriverArrayAddr) {
         this->unlock();
-        status = connectToArrayPort();
+        status = setArrayInterrupt(value);
         this->lock();
         if (status != asynSuccess) goto done;
-
+        if(!value)
+            pPrevInputArray_.reset();   // Release the input NDArray
     } else if ((function == NDPluginDriverQueueSize) ||
                (function == NDPluginDriverNumThreads)) {
         if ((status = deleteCallbackThreads())) goto done;
@@ -702,7 +686,7 @@ asynStatus NDPluginDriver::writeInt32(asynUser *pasynUser, epicsInt32 value)
         }
     }
     
-    done:
+done:
     /* Do callbacks so higher layers see any changes */
     callParamCallbacks(addr);
     
@@ -717,7 +701,6 @@ asynStatus NDPluginDriver::writeInt32(asynUser *pasynUser, epicsInt32 value)
     return status;
 }
 
-
 /** Called when asyn clients call pasynOctet->write().
   * This function performs actions for some parameters, including NDPluginDriverArrayPort.
   * For all parameters it sets the value in the parameter library and calls any registered callbacks..
@@ -737,7 +720,7 @@ asynStatus NDPluginDriver::writeOctet(asynUser *pasynUser, const char *value,
     /* Set the parameter in the parameter library. */
     status = (asynStatus)setStringParam(addr, function, (char *)value);
 
-    if (function == NDPluginDriverArrayPort) {
+    if (function == NDPluginDriverArrayPv) {
         this->unlock();
         connectToArrayPort();
         this->lock();
@@ -893,7 +876,7 @@ asynStatus NDPluginDriver::createCallbackThreads()
     pThreads_.resize(numThreads);
 
     /* Create the message queue for the input arrays */
-    pToThreadMsgQ_ = new epicsMessageQueue(queueSize, sizeof(ToThreadMessage_t));
+    pToThreadMsgQ_ = new epicsMessageQueue(queueSize, sizeof(ToThreadMessageType_t));
     if (!pToThreadMsgQ_) {
         /* We don't handle memory errors above, so no point in handling this. */
         cantProceed("NDPluginDriver::createCallbackThreads epicsMessageQueueCreate failure\n");
@@ -925,7 +908,7 @@ asynStatus NDPluginDriver::createCallbackThreads()
   * This method is called from the destructor and whenever QueueSize or NumThreads is changed. */ 
 asynStatus NDPluginDriver::deleteCallbackThreads()
 {
-    ToThreadMessage_t toMsg = {ToThreadMessageExit, 0};
+    ToThreadMessageType_t toMsg = ToThreadMessageExit;
     FromThreadMessage_t fromMsg;
     asynStatus status = asynSuccess;
     int i;
@@ -1010,4 +993,102 @@ asynStatus NDPluginDriver::createSortingThread()
     return asynSuccess;
 }
 
-
+// Implemented for pvData::Requester
+string NDPluginDriver::getRequesterName (void)
+{
+    string value;
+    getStringParam(NDPortNameSelf, value);
+    return value;
+}
+
+void NDPluginDriver::message (string const & message, MessageType messageType)
+{
+    printf("NDPluginDriver::message [type=%s] %s\n", getMessageTypeName(messageType).c_str(),
+            message.c_str());
+}
+
+// Implemented for pvAccess::ChannelRequester
+void NDPluginDriver::channelCreated (const Status& status, Channel::shared_pointer const & channel)
+{
+    if(!status.isOK())
+        printf("NDPluginDriver::channelCreated: failed to create channel\n");
+    else
+        printf("NDPluginDriver::channelCreated: %s created\n", channel->getChannelName().c_str());
+}
+
+void NDPluginDriver::channelStateChange (Channel::shared_pointer const & channel,
+        Channel::ConnectionState state)
+{
+    printf("NDPluginDriver::channelStateChange %s: %s\n",
+            channel->getChannelName().c_str(),
+            Channel::ConnectionStateNames[state]);
+    setIntegerParam(NDPluginDriverArrayConnected, state == Channel::CONNECTED);
+}
+
+// Implemented for pvData::MonitorRequester
+void NDPluginDriver::monitorConnect (Status const & status, MonitorPtr const & monitor,
+        StructureConstPtr const & structure)
+{
+    const char *functionName = "monitorConnect";
+    printf("NDPluginDriver::monitorConnect monitor connects [type=%s]\n",
+            Status::StatusTypeName[status.getType()]);
+
+    if (status.isSuccess())
+    {
+        if(!NTNDArray::isCompatible(structure))
+        {
+            // TODO: better error handling here
+            asynPrint(pasynUserSelf, ASYN_TRACE_ERROR,
+                                    "%s::%s incompatible Structure (Not NTNDArray!)\n",
+                                    driverName, functionName);
+            return;
+        }
+        gotFirst_ = false;
+    }
+}
+
+void NDPluginDriver::monitorEvent (MonitorPtr const & monitor)
+{
+    const char *functionName = "monitorEvent";
+
+    MonitorElementPtr update;
+    while ((update = monitor->poll()))
+    {
+        if(!gotFirst_)
+        {
+            asynPrint(pasynUserSelf, ASYN_TRACE_FLOW,
+                        "%s::%s discarding first update\n",
+                        driverName, functionName);
+            gotFirst_ = true;
+            monitor->release(update);
+            continue;
+        }
+
+        if(!update->overrunBitSet->isEmpty())
+        {
+            lock();
+            int overruns;
+            getIntegerParam(NDPluginDriverArrayOverruns, &overruns);
+            setIntegerParam(NDPluginDriverArrayOverruns, overruns + 1);
+            unlock();
+        }
+
+        /* At this point, 'update' is ours. After the call to 'release', however,
+         * pvAccess can do whatever it wishes with 'update'. Therefore, in a
+         * multithreaded environment like this one, we need to copy
+         * update->pvStructure to another structure to prevent data races.
+         * The pool allocator takes care of that.
+         */
+        driverCallback(pasynUserSelf, NDArrayPool_.alloc(update->pvStructurePtr));
+        monitor->release(update);
+    }
+}
+
+void NDPluginDriver::unlisten (MonitorPtr const & monitor)
+{
+    const char *functionName = "unlisten";
+    asynPrint(pasynUserSelf, ASYN_TRACE_FLOW,
+        "%s::%s monitor unlistens\n",
+        driverName, functionName);
+    printf("NDPluginDriver::unlisten monitor unlistens\n");
+}

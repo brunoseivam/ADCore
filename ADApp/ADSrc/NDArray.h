@@ -16,6 +16,9 @@
 #include <epicsTime.h>
 #include <stdio.h>
 
+#include <pv/ntndarray.h>
+#include <pv/ntndarrayAttribute.h>
+
 #include "NDAttribute.h"
 #include "NDAttributeList.h"
 
@@ -67,96 +70,140 @@ typedef struct NDDimension {
 
 /** Structure returned by NDArray::getInfo */
 typedef struct NDArrayInfo {
-    size_t nElements;       /**< The total number of elements in the array */
-    int bytesPerElement;    /**< The number of bytes per element in the array */
-    size_t totalBytes;      /**< The total number of bytes required to hold the array;
-                              *  this may be less than NDArray::dataSize. */
-                            /**< The following are mostly useful for color images (RGB1, RGB2, RGB3) */
+    size_t nElements;        /**< The total number of elements in the array */
+    int bytesPerElement;     /**< The number of bytes per element in the array */
+    size_t totalBytes;       /**< The total number of bytes required to hold the array;
+                               *  this may be less than NDArray::dataSize. */
+                             /**< The following are mostly useful for color images (RGB1, RGB2, RGB3) */
     NDColorMode_t colorMode; /**< The color mode */
-    int xDim;               /**< The array index which is the X dimension */
-    int yDim;               /**< The array index which is the Y dimension */
-    int colorDim;           /**< The array index which is the color dimension */
-    size_t xSize;           /**< The X size of the array */
-    size_t ySize;           /**< The Y size of the array */
-    size_t colorSize;       /**< The color size of the array */
-    size_t xStride;         /**< The number of array elements between X values */
-    size_t yStride;         /**< The number of array elements between Y values */
-    size_t colorStride;     /**< The number of array elements between color values */
+
+    struct
+    {
+        int dim;            /**< The array index for this dimension */
+        size_t size;        /**< Number of elements in this dimension */
+        size_t stride;      /**< Number of elements between values in this dimension */
+    }x, y, color;
 } NDArrayInfo_t;
 
 /** N-dimensional array class; each array has a set of dimensions, a data type, pointer to data, and optional attributes. 
   * An NDArray also has a uniqueId and timeStamp that to identify it. NDArray objects can be allocated
   * by an NDArrayPool object, which maintains a free list of NDArrays for efficient memory management. */
-class epicsShareClass NDArray {
-public:
-    /* Methods */
-    NDArray();
-    ~NDArray();
-    int          initDimension   (NDDimension_t *pDimension, size_t size);
-    int          getInfo         (NDArrayInfo_t *pInfo);
-    int          reserve();
-    int          release();
-    int          report(FILE *fp, int details);
+class NDArray;
+typedef std::tr1::shared_ptr<NDArray> NDArrayPtr;
+typedef std::tr1::shared_ptr<const NDArray> NDArrayConstPtr;
+
+class epicsShareClass NDArray
+{
+private:
+    void initAttributes (void);
+
     friend class NDArrayPool;
-    
-private:
-    ELLNODE      node;              /**< This must come first because ELLNODE must have the same address as NDArray object */
-    int          referenceCount;    /**< Reference count for this NDArray=number of clients who are using it */
+    epics::nt::NTNDArrayPtr array_;
+    NDAttributeListPtr attributes_;
 
 public:
-    class NDArrayPool *pNDArrayPool; /**< The NDArrayPool object that created this array */
-    int           uniqueId;     /**< A number that must be unique for all NDArrays produced by a driver after is has started */
-    double        timeStamp;    /**< The time stamp in seconds for this array; seconds since Epoch (00:00:00 UTC, January 1, 1970)
-                                  * is recommended, but some drivers may use a different start time.*/
-    epicsTimeStamp epicsTS;     /**< The epicsTimeStamp; this is set with pasynManager->updateTimeStamp(), 
-                                  * and can come from a user-defined timestamp source. */
-    int           ndims;        /**< The number of dimensions in this array; minimum=1. */
-    NDDimension_t dims[ND_ARRAY_MAX_DIMS]; /**< Array of dimension sizes for this array; first ndims values are meaningful. */
-    NDDataType_t  dataType;     /**< Data type for this array. */
-    size_t        dataSize;     /**< Data size for this array; actual amount of memory allocated for *pData, may be more than
-                                  * required to hold the array*/
-    void          *pData;       /**< Pointer to the array data.
-                                  * The data is assumed to be stored in the order of dims[0] changing fastest, and 
-                                  * dims[ndims-1] changing slowest. */
-    NDAttributeList *pAttributeList;  /**< Linked list of attributes */
-};
+    POINTER_DEFINITIONS(NDArray);
 
-/** The NDArrayPool class manages a free list (pool) of NDArray objects.
-  * Drivers allocate NDArray objects from the pool, and pass these objects to plugins.
-  * Plugins increase the reference count on the object when they place the object on
-  * their queue, and decrease the reference count when they are done processing the
-  * array. When the reference count reaches 0 again the NDArray object is placed back
-  * on the free list. This mechanism minimizes the copying of array data in plugins.
-  */
-class epicsShareClass NDArrayPool {
-public:
-    NDArrayPool  (int maxBuffers, size_t maxMemory);
-    NDArray*     alloc     (int ndims, size_t *dims, NDDataType_t dataType, size_t dataSize, void *pData);
-    NDArray*     copy      (NDArray *pIn, NDArray *pOut, int copyData);
+    static const epics::nt::NTNDArrayBuilderPtr builder;
 
-    int          reserve   (NDArray *pArray);
-    int          release   (NDArray *pArray);
-    int          convert   (NDArray *pIn,
-                            NDArray **ppOut,
-                            NDDataType_t dataTypeOut,
-                            NDDimension_t *outDims);
-    int          convert   (NDArray *pIn,
-                            NDArray **ppOut,
-                            NDDataType_t dataTypeOut);
-    int          report     (FILE  *fp, int details);
-    int          maxBuffers ();
-    int          numBuffers ();
-    size_t       maxMemory  ();
-    size_t       memorySize ();
-    int          numFree    ();
-private:
-    ELLLIST      freeList_;      /**< Linked list of free NDArray objects that form the pool */
-    epicsMutexId listLock_;      /**< Mutex to protect the free list */
-    int          maxBuffers_;    /**< Maximum number of buffers this object is allowed to allocate; -1=unlimited */
-    int          numBuffers_;    /**< Number of buffers this object has currently allocated */
-    size_t       maxMemory_;     /**< Maximum bytes of memory this object is allowed to allocate; -1=unlimited */
-    size_t       memorySize_;    /**< Number of bytes of memory this object has currently allocated */
-    int          numFree_;       /**< Number of NDArray objects in the free list */
+    static void initDimension (NDDimension_t & dim, size_t size,
+            size_t offset = 0, int binning = 1, int reverse = 0);
+
+    NDArray(void);
+    NDArray(epics::nt::NTNDArray::const_shared_pointer & array);
+
+    void copy (NDArray::const_shared_pointer & from);
+
+    epics::nt::NTNDArrayPtr getArray(void);
+    epics::nt::NTNDArray::const_shared_pointer getArray (void) const;
+
+    template<typename T>
+    epics::pvData::shared_vector<T> getData (void)
+    {
+        return array_->getValue()->get< epics::pvData::PVValueArray<T> >()->reuse();
+    }
+
+    template<typename T>
+    epics::pvData::shared_vector<const T> viewData (void) const
+    {
+        return array_->getValue()->get< epics::pvData::PVValueArray<T> >()->view();
+    }
+
+    const void * viewRawData (void) const;
+
+    template<typename T>
+    void setData (epics::pvData::shared_vector<T> & data)
+    {
+        setData<T>(freeze(data));
+    }
+
+    template<typename T>
+    void setData (epics::pvData::shared_vector<const T> const & data)
+    {
+        typedef typename epics::pvData::PVValueArray<T> arrayType;
+
+        std::string fieldName(
+                std::string(epics::pvData::ScalarTypeFunc::name(arrayType::typeCode)) +
+                std::string("Value")
+        );
+
+        epics::pvData::PVUnionPtr unionField(array_->getValue());
+        unionField->select<arrayType>(fieldName)->replace(data);
+    }
+
+    template<typename T>
+    void zeroData (void)
+    {
+        // TODO: this is potentially slow
+        epics::pvData::shared_vector<T> data(getData<T>());
+        typename epics::pvData::shared_vector<T>::iterator iter;
+        for(iter = data.begin(); iter != data.end(); ++iter)
+            *iter = 0;
+        setData<T>(data);
+    }
+
+    void zeroData (void)
+    {
+        switch(getDataType()) {
+        case epics::pvData::pvBoolean: zeroData<epics::pvData::boolean>(); break;
+        case epics::pvData::pvByte:    zeroData<epics::pvData::int8>();    break;
+        case epics::pvData::pvUByte:   zeroData<epics::pvData::uint8>();   break;
+        case epics::pvData::pvShort:   zeroData<epics::pvData::int16>();   break;
+        case epics::pvData::pvUShort:  zeroData<epics::pvData::uint16>();  break;
+        case epics::pvData::pvInt:     zeroData<epics::pvData::int32>();   break;
+        case epics::pvData::pvUInt:    zeroData<epics::pvData::uint32>();  break;
+        case epics::pvData::pvLong:    zeroData<epics::pvData::int64>();   break;
+        case epics::pvData::pvULong:   zeroData<epics::pvData::uint64>();  break;
+        case epics::pvData::pvFloat:   zeroData<float>();  break;
+        case epics::pvData::pvDouble:  zeroData<double>(); break;
+        case epics::pvData::pvString:  break;
+        }
+    }
+
+    std::vector<NDDimension_t> getDimensions (void) const;
+    epics::pvData::ScalarType getDataType (void) const;
+    NDColorMode_t getColorMode (void) const;
+    NDArrayInfo_t getInfo (void) const;
+    epics::pvData::int32 getUniqueId (void) const;
+    epics::pvData::int64 getCompressedSize (void) const;
+    epics::pvData::int64 getUncompressedSize (void) const;
+    epics::pvData::TimeStamp getTimeStamp (void) const;
+    epics::pvData::TimeStamp getEpicsTimeStamp (void) const;
+    bool hasData (void) const;
+
+    NDAttributeListPtr getAttributeList (void);
+    NDAttributeListConstPtr viewAttributeList (void) const;
+    void eraseAttributes (void);
+
+    void setDimensions (std::vector<NDDimension_t> const & dims);
+    void setUniqueId (epics::pvData::int32 value);
+    void setCompressedSize (epics::pvData::int64 value);
+    void setUncompressedSize (epics::pvData::int64 value);
+    void setTimeStamp (epics::pvData::TimeStamp const & value);
+    void setEpicsTimeStamp (epics::pvData::TimeStamp const & value);
+
+    /* Methods */
+    int report (FILE *fp, int details) const;
 };
 
 #endif

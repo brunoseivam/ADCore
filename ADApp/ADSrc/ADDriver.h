@@ -139,7 +139,8 @@ typedef enum
 class epicsShareClass ADDriver : public asynNDArrayDriver {
 public:
     /* This is the constructor for the class. */
-    ADDriver(const char *portName, int maxAddr, int numParams, int maxBuffers, size_t maxMemory,
+    ADDriver(const char *portName, std::string const & arrayName, int maxAddr,
+             int numParams, int maxBuffers, size_t maxMemory,
              int interfaceMask, int interruptMask,
              int asynFlags, int autoConnect, int priority, int stackSize);
 
@@ -191,7 +192,7 @@ protected:
     int ADStatusMessage;
     int ADStringToServer;
     int ADStringFromServer; 
-    #define LAST_AD_PARAM ADStringFromServer   
+    #define LAST_AD_PARAM ADStringFromServer
 };
 #define NUM_AD_PARAMS ((int)(&LAST_AD_PARAM - &FIRST_AD_PARAM + 1))
 

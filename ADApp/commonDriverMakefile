@@ -9,124 +9,123 @@ $(PROD_NAME)_DBD += NDPluginSupport.dbd
 PROD_LIBS        += ADBase
 $(PROD_NAME)_DBD += ADSupport.dbd
 
-$(PROD_NAME)_DBD += NDFileNull.dbd
+#$(PROD_NAME)_DBD += NDFileNull.dbd
 
 ifeq ($(WITH_EPICS_V4),YES)
-  $(PROD_NAME)_DBD += NDPluginPva.dbd
+#  $(PROD_NAME)_DBD += NDPluginPva.dbd
   $(PROD_NAME)_DBD += PVAServerRegister.dbd
-  PROD_LIBS += ntndArrayConverter
+#  PROD_LIBS += ntndArrayConverter
   PROD_LIBS += nt
   PROD_LIBS += pvDatabase
-  PROD_LIBS += pvAccess
+  PROD_LIBS += pvAccess pvAccessIOC
   PROD_LIBS += pvData
-  PROD_LIBS += ntndArrayConverter
 endif
 
-ifeq ($(WITH_NETCDF),YES)
-  $(PROD_NAME)_DBD += NDFileNetCDF.dbd
-  ifeq ($(NETCDF_EXTERNAL),NO)
-    PROD_LIBS += netCDF
-  else
-    ifdef NETCDF_LIB
-      netcdf_DIR   = $(NETCDF_LIB)
-      PROD_LIBS     += netcdf
-    else
-      PROD_SYS_LIBS += netcdf
-    endif
-  endif
-endif
+#ifeq ($(WITH_NETCDF),YES)
+#  $(PROD_NAME)_DBD += NDFileNetCDF.dbd
+#  ifeq ($(NETCDF_EXTERNAL),NO)
+#    PROD_LIBS += netCDF
+#  else
+#    ifdef NETCDF_LIB
+#      netcdf_DIR   = $(NETCDF_LIB)
+#      PROD_LIBS     += netcdf
+#    else
+#      PROD_SYS_LIBS += netcdf
+#    endif
+#  endif
+#endif
 
-ifeq ($(WITH_GRAPHICSMAGICK), YES)
-  $(PROD_NAME)_DBD += NDFileMagick.dbd
-  ifeq ($(GRAPHICSMAGICK_EXTERNAL),NO)
-    PROD_LIBS               += Magick++ coders Magick jbig jp2 bzlib png webp lcms ttf wmf filters
-  else
-    ifdef GRAPHICSMAGICK_LIB
-      GraphicsMagick_DIR     = $(GRAPHICSMAGICK_LIB)
-      GraphicsMagick++_DIR   = $(GRAPHICSMAGICK_LIB)
-      GraphicsMagickWand_DIR = $(GRAPHICSMAGICK_LIB)
-      PROD_LIBS             += GraphicsMagick++ GraphicsMagick
-    else
-      PROD_SYS_LIBS         += GraphicsMagick++ GraphicsMagick
-    endif
-  endif
-  # The following system libraries must be installed to use GraphicsMagick
-  PROD_SYS_LIBS_Linux    += X11 Xext
-endif
+#ifeq ($(WITH_GRAPHICSMAGICK), YES)
+#  $(PROD_NAME)_DBD += NDFileMagick.dbd
+#  ifeq ($(GRAPHICSMAGICK_EXTERNAL),NO)
+#    PROD_LIBS               += Magick++ coders Magick jbig jp2 bzlib png webp lcms ttf wmf filters
+#  else
+#    ifdef GRAPHICSMAGICK_LIB
+#      GraphicsMagick_DIR     = $(GRAPHICSMAGICK_LIB)
+#      GraphicsMagick++_DIR   = $(GRAPHICSMAGICK_LIB)
+#      GraphicsMagickWand_DIR = $(GRAPHICSMAGICK_LIB)
+#      PROD_LIBS             += GraphicsMagick++ GraphicsMagick
+#    else
+#      PROD_SYS_LIBS         += GraphicsMagick++ GraphicsMagick
+#    endif
+#  endif
+#  # The following system libraries must be installed to use GraphicsMagick
+#  PROD_SYS_LIBS_Linux    += X11 Xext
+#endif
 
-ifeq ($(WITH_TIFF),YES)
-  $(PROD_NAME)_DBD += NDFileTIFF.dbd
-  ifeq ($(TIFF_EXTERNAL),NO)
-    PROD_LIBS += tiff
-  else
-    ifdef TIFF_LIB
-      tiff_DIR     = $(TIFF_LIB)
-      PROD_LIBS     += tiff
-    else
-      PROD_SYS_LIBS += tiff
-    endif
-  endif
-endif
+#ifeq ($(WITH_TIFF),YES)
+#  $(PROD_NAME)_DBD += NDFileTIFF.dbd
+#  ifeq ($(TIFF_EXTERNAL),NO)
+#    PROD_LIBS += tiff
+#  else
+#    ifdef TIFF_LIB
+#      tiff_DIR     = $(TIFF_LIB)
+#      PROD_LIBS     += tiff
+#    else
+#      PROD_SYS_LIBS += tiff
+#    endif
+#  endif
+#endif
 
-ifeq ($(WITH_JPEG),YES)
-  $(PROD_NAME)_DBD += NDFileJPEG.dbd
-  ifeq ($(JPEG_EXTERNAL),NO)
-    PROD_LIBS += jpeg
-  else
-    ifdef JPEG_LIB
-      jpeg_DIR     = $(JPEG_LIB)
-      PROD_LIBS     += jpeg
-    else
-      PROD_SYS_LIBS += jpeg
-    endif
-  endif
-endif
+#ifeq ($(WITH_JPEG),YES)
+#  $(PROD_NAME)_DBD += NDFileJPEG.dbd
+#  ifeq ($(JPEG_EXTERNAL),NO)
+#    PROD_LIBS += jpeg
+#  else
+#    ifdef JPEG_LIB
+#      jpeg_DIR     = $(JPEG_LIB)
+#      PROD_LIBS     += jpeg
+#    else
+#      PROD_SYS_LIBS += jpeg
+#    endif
+#  endif
+#endif
 
-ifeq ($(XML2_EXTERNAL),NO)
-  PROD_LIBS += xml2
-else
-  ifdef XML2_LIB
-    xml2_DIR     = $(XML2_LIB)
-    PROD_LIBS     += xml2
-  else
-    PROD_SYS_LIBS += xml2
-  endif
-endif
+#ifeq ($(XML2_EXTERNAL),NO)
+#  PROD_LIBS += xml2
+#else
+#  ifdef XML2_LIB
+#    xml2_DIR     = $(XML2_LIB)
+#    PROD_LIBS     += xml2
+#  else
+#    PROD_SYS_LIBS += xml2
+#  endif
+#endif
 
-ifeq ($(WITH_NEXUS),YES)
-  $(PROD_NAME)_DBD += NDFileNexus.dbd
-  ifeq ($(NEXUS_EXTERNAL),NO)
-    PROD_LIBS += NeXus
-  else
-    ifdef NEXUS_LIB
-      nexus_DIR    = $(NEXUS_LIB)
-      PROD_LIBS     += NeXus
-    else
-      PROD_SYS_LIBS += NeXus
-    endif
-  endif
-endif
+#ifeq ($(WITH_NEXUS),YES)
+#  $(PROD_NAME)_DBD += NDFileNexus.dbd
+#  ifeq ($(NEXUS_EXTERNAL),NO)
+#    PROD_LIBS += NeXus
+#  else
+#    ifdef NEXUS_LIB
+#      nexus_DIR    = $(NEXUS_LIB)
+#      PROD_LIBS     += NeXus
+#    else
+#      PROD_SYS_LIBS += NeXus
+#    endif
+#  endif
+#endif
 
-ifeq ($(WITH_HDF5),YES)
-  $(PROD_NAME)_DBD += NDFileHDF5.dbd
-  ifeq ($(HDF5_EXTERNAL),NO)
-    PROD_LIBS += hdf5
-  else
-    ifdef HDF5_LIB
-      hdf5_DIR     = $(HDF5_LIB)
-      PROD_LIBS     += hdf5
-    else
-      PROD_SYS_LIBS += hdf5
-    endif
-  endif
-  ifeq ($(HDF5_STATIC_BUILD), NO)
-    USR_CXXFLAGS_WIN32    += -DH5_BUILT_AS_DYNAMIC_LIB
-    USR_CFLAGS_WIN32      += -DH5_BUILT_AS_DYNAMIC_LIB
-  else
-    USR_CXXFLAGS_WIN32    += -DH5_BUILT_AS_STATIC_LIB
-    USR_CFLAGS_WIN32      += -DH5_BUILT_AS_STATIC_LIB
-  endif
-endif
+#ifeq ($(WITH_HDF5),YES)
+#  $(PROD_NAME)_DBD += NDFileHDF5.dbd
+#  ifeq ($(HDF5_EXTERNAL),NO)
+#    PROD_LIBS += hdf5
+#  else
+#    ifdef HDF5_LIB
+#      hdf5_DIR     = $(HDF5_LIB)
+#      PROD_LIBS     += hdf5
+#    else
+#      PROD_SYS_LIBS += hdf5
+#    endif
+#  endif
+#  ifeq ($(HDF5_STATIC_BUILD), NO)
+#    USR_CXXFLAGS_WIN32    += -DH5_BUILT_AS_DYNAMIC_LIB
+#    USR_CFLAGS_WIN32      += -DH5_BUILT_AS_DYNAMIC_LIB
+#  else
+#    USR_CXXFLAGS_WIN32    += -DH5_BUILT_AS_STATIC_LIB
+#    USR_CFLAGS_WIN32      += -DH5_BUILT_AS_STATIC_LIB
+#  endif
+#endif
 
 ifeq ($(WITH_BLOSC),YES)
   ifeq ($(BLOSC_EXTERNAL),NO)
@@ -141,42 +140,42 @@ ifeq ($(WITH_BLOSC),YES)
   endif
 endif
 
-ifeq ($(WITH_SZIP),YES)
-  ifeq ($(SZIP_EXTERNAL),NO)
-    PROD_LIBS += szip
-  else
-    ifdef SZIP_LIB
-      sz_DIR       = $(SZIP_LIB)
-      PROD_LIBS     += sz
-    else
-      PROD_SYS_LIBS += sz
-    endif
-  endif
-endif
+#ifeq ($(WITH_SZIP),YES)
+#  ifeq ($(SZIP_EXTERNAL),NO)
+#    PROD_LIBS += szip
+#  else
+#    ifdef SZIP_LIB
+#      sz_DIR       = $(SZIP_LIB)
+#      PROD_LIBS     += sz
+#    else
+#      PROD_SYS_LIBS += sz
+#    endif
+#  endif
+#endif
 
-ifeq ($(WITH_ZLIB),YES)
-  ifeq ($(ZLIB_EXTERNAL),NO)
-    PROD_LIBS += zlib
-  else
-    ifdef ZLIB_LIB
-      z_DIR        = $(ZLIB_LIB)
-      PROD_LIBS     += z
-    else
-      PROD_SYS_LIBS += z
-    endif
-  endif
-endif
+#ifeq ($(WITH_ZLIB),YES)
+#  ifeq ($(ZLIB_EXTERNAL),NO)
+#    PROD_LIBS += zlib
+#  else
+#    ifdef ZLIB_LIB
+#      z_DIR        = $(ZLIB_LIB)
+#      PROD_LIBS     += z
+#    else
+#      PROD_SYS_LIBS += z
+#    endif
+#  endif
+#endif
 
-ifdef ADPLUGINEDGE
-  $(PROD_NAME)_DBD  += NDPluginEdge.dbd
-  PROD_LIBS         += NDPluginEdge
-  ifdef OPENCV_LIB
-    opencv_core_DIR += $(OPENCV_LIB)
-    PROD_LIBS       += opencv_core opencv_imgproc
-  else
-    PROD_SYS_LIBS   += opencv_core opencv_imgproc
-  endif
-endif
+#ifdef ADPLUGINEDGE
+#  $(PROD_NAME)_DBD  += NDPluginEdge.dbd
+#  PROD_LIBS         += NDPluginEdge
+#  ifdef OPENCV_LIB
+#    opencv_core_DIR += $(OPENCV_LIB)
+#    PROD_LIBS       += opencv_core opencv_imgproc
+#  else
+#    PROD_SYS_LIBS   += opencv_core opencv_imgproc
+#  endif
+#endif
 
 # Required modules
 $(PROD_NAME)_DBD   += asyn.dbd

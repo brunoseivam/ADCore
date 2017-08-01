@@ -32,7 +32,6 @@ public:
                     class asynNDArrayDriver *pDriver, const char *dataType);
     paramAttribute(paramAttribute& attribute);
     ~paramAttribute();
-    paramAttribute* copy(NDAttribute *pAttribute);
     int updateValue();
     int report(FILE *fp, int details);
 

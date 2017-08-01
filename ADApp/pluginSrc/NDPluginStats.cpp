@@ -33,20 +33,24 @@
   #define M_PI 3.14159265358979323846
 #endif
 
+using namespace epics::pvData;
+using std::vector;
+using std::string;
+
 static const char *driverName="NDPluginStats";
 
 template <typename epicsType>
-asynStatus NDPluginStats::doComputeHistogramT(NDArray *pArray, NDStats_t *pStats)
+asynStatus NDPluginStats::doComputeHistogramT(NDArrayConstPtr pArray, NDStats_t *pStats)
 {
-    epicsType *pData = (epicsType *)pArray->pData;
+    const epicsType *pData = pArray->viewData<epicsType>().data();
     size_t i;
     double scale, entropy;
     int bin;
     size_t nElements;
     double value, counts;
-    NDArrayInfo arrayInfo;
+    NDArrayInfo_t arrayInfo;
 
-    pArray->getInfo(&arrayInfo);
+    arrayInfo = pArray->getInfo();
     nElements = arrayInfo.nElements;
     scale = pStats->histSize / (pStats->histMax - pStats->histMin);
 
@@ -75,51 +79,57 @@ asynStatus NDPluginStats::doComputeHistogramT(NDArray *pArray, NDStats_t *pStats
     return(asynSuccess);
 }
 
-asynStatus NDPluginStats::doComputeHistogram(NDArray *pArray, NDStats_t *pStats)
+asynStatus NDPluginStats::doComputeHistogram(NDArrayConstPtr pArray, NDStats_t *pStats)
 {
     asynStatus status;
     
-    switch(pArray->dataType) {
-        case NDInt8:
-            status = doComputeHistogramT<epicsInt8>(pArray, pStats);
+    switch(pArray->getDataType()) {
+        case pvByte:
+            status = doComputeHistogramT<int8>(pArray, pStats);
             break;
-        case NDUInt8:
-            status = doComputeHistogramT<epicsUInt8>(pArray, pStats);
+        case pvUByte:
+            status = doComputeHistogramT<uint8>(pArray, pStats);
             break;
-        case NDInt16:
-            status = doComputeHistogramT<epicsInt16>(pArray, pStats);
+        case pvShort:
+            status = doComputeHistogramT<int16>(pArray, pStats);
             break;
-        case NDUInt16:
-            status = doComputeHistogramT<epicsUInt16>(pArray, pStats);
+        case pvUShort:
+            status = doComputeHistogramT<uint16>(pArray, pStats);
             break;
-        case NDInt32:
-            status = doComputeHistogramT<epicsInt32>(pArray, pStats);
+        case pvInt:
+            status = doComputeHistogramT<int32>(pArray, pStats);
             break;
-        case NDUInt32:
-            status = doComputeHistogramT<epicsUInt32>(pArray, pStats);
+        case pvUInt:
+            status = doComputeHistogramT<uint32>(pArray, pStats);
             break;
-        case NDFloat32:
-            status = doComputeHistogramT<epicsFloat32>(pArray, pStats);
+        case pvLong:
+            status = doComputeHistogramT<int64>(pArray, pStats);
             break;
-        case NDFloat64:
-            status = doComputeHistogramT<epicsFloat64>(pArray, pStats);
+        case pvULong:
+            status = doComputeHistogramT<uint64>(pArray, pStats);
+            break;
+        case pvFloat:
+            status = doComputeHistogramT<float>(pArray, pStats);
+            break;
+        case pvDouble:
+            status = doComputeHistogramT<double>(pArray, pStats);
             break;
         default:
             status = asynError;
         break;
     }
-    return(status);
+    return status;
 }
 
 template <typename epicsType>
-void NDPluginStats::doComputeStatisticsT(NDArray *pArray, NDStats_t *pStats)
+void NDPluginStats::doComputeStatisticsT(NDArrayConstPtr pArray, NDStats_t *pStats)
 {
     size_t i, imin, imax;
-    epicsType *pData = (epicsType *)pArray->pData;
-    NDArrayInfo arrayInfo;
+    const epicsType *pData = pArray->viewData<epicsType>().data();
+    NDArrayInfo_t arrayInfo;
     double value;
 
-    pArray->getInfo(&arrayInfo);
+    arrayInfo = pArray->getInfo();
     pStats->nElements = arrayInfo.nElements;
     pStats->min = (double) pData[0];
     imin = 0;
@@ -140,54 +150,58 @@ void NDPluginStats::doComputeStatisticsT(NDArray *pArray, NDStats_t *pStats)
         pStats->total += value;
         pStats->sigma += value * value;
     }
-    pStats->minX = imin % arrayInfo.xSize;
-    pStats->minY = imin / arrayInfo.xSize;
-    pStats->maxX = imax % arrayInfo.xSize;
-    pStats->maxY = imax / arrayInfo.xSize;
+    pStats->minX = imin % arrayInfo.x.size;
+    pStats->minY = imin / arrayInfo.x.size;
+    pStats->maxX = imax % arrayInfo.x.size;
+    pStats->maxY = imax / arrayInfo.x.size;
     pStats->net = pStats->total;
     pStats->mean = pStats->total / pStats->nElements;
     pStats->sigma = sqrt((pStats->sigma / pStats->nElements) - (pStats->mean * pStats->mean));
 }
 
-int NDPluginStats::doComputeStatistics(NDArray *pArray, NDStats_t *pStats)
+asynStatus NDPluginStats::doComputeStatistics(NDArrayConstPtr pArray, NDStats_t *pStats)
 {
-
-    switch(pArray->dataType) {
-        case NDInt8:
-            doComputeStatisticsT<epicsInt8>(pArray, pStats);
+    switch(pArray->getDataType()) {
+        case pvByte:
+            doComputeStatisticsT<int8>(pArray, pStats);
             break;
-        case NDUInt8:
-            doComputeStatisticsT<epicsUInt8>(pArray, pStats);
+        case pvUByte:
+            doComputeStatisticsT<uint8>(pArray, pStats);
             break;
-        case NDInt16:
-            doComputeStatisticsT<epicsInt16>(pArray, pStats);
+        case pvShort:
+            doComputeStatisticsT<int16>(pArray, pStats);
             break;
-        case NDUInt16:
-            doComputeStatisticsT<epicsUInt16>(pArray, pStats);
+        case pvUShort:
+            doComputeStatisticsT<uint16>(pArray, pStats);
             break;
-        case NDInt32:
-            doComputeStatisticsT<epicsInt32>(pArray, pStats);
+        case pvInt:
+            doComputeStatisticsT<int32>(pArray, pStats);
             break;
-        case NDUInt32:
-            doComputeStatisticsT<epicsUInt32>(pArray, pStats);
+        case pvUInt:
+            doComputeStatisticsT<uint32>(pArray, pStats);
             break;
-        case NDFloat32:
-            doComputeStatisticsT<epicsFloat32>(pArray, pStats);
+        case pvLong:
+            doComputeStatisticsT<int64>(pArray, pStats);
             break;
-        case NDFloat64:
-            doComputeStatisticsT<epicsFloat64>(pArray, pStats);
+        case pvULong:
+            doComputeStatisticsT<uint64>(pArray, pStats);
+            break;
+        case pvFloat:
+            doComputeStatisticsT<float>(pArray, pStats);
+            break;
+        case pvDouble:
+            doComputeStatisticsT<double>(pArray, pStats);
             break;
         default:
-            return(ND_ERROR);
-        break;
+            return asynError;
     }
-    return(ND_SUCCESS);
+    return asynSuccess;
 }
 
 template <typename epicsType>
-asynStatus NDPluginStats::doComputeCentroidT(NDArray *pArray, NDStats_t *pStats)
+asynStatus NDPluginStats::doComputeCentroidT(NDArrayConstPtr pArray, NDStats_t *pStats)
 {
-    epicsType *pData = (epicsType *)pArray->pData;
+    const epicsType *pData = pArray->viewData<epicsType>().data();
     double value, *pValue, *pThresh, varX, varY, varXY;
     size_t ix, iy;
     /*Raw moments */
@@ -199,7 +213,7 @@ asynStatus NDPluginStats::doComputeCentroidT(NDArray *pArray, NDStats_t *pStats)
     /*Central moments */
     double mu20, mu02, mu11, mu30, mu03, mu40, mu04;
 
-    if (pArray->ndims > 2) return(asynError);
+    if (pArray->getDimensions().size() > 2) return(asynError);
     
     for (iy=0; iy<pStats->profileSizeY; iy++) {
         for (ix=0; ix<pStats->profileSizeX; ix++) {
@@ -283,50 +297,56 @@ asynStatus NDPluginStats::doComputeCentroidT(NDArray *pArray, NDStats_t *pStats)
     return(asynSuccess);
 }
 
-asynStatus NDPluginStats::doComputeCentroid(NDArray *pArray, NDStats_t *pStats)
+asynStatus NDPluginStats::doComputeCentroid(NDArrayConstPtr pArray, NDStats_t *pStats)
 {
     asynStatus status;
 
-    switch(pArray->dataType) {
-        case NDInt8:
-            status = doComputeCentroidT<epicsInt8>(pArray, pStats);
+    switch(pArray->getDataType()) {
+        case pvByte:
+            status = doComputeCentroidT<int8>(pArray, pStats);
             break;
-        case NDUInt8:
-            status = doComputeCentroidT<epicsUInt8>(pArray, pStats);
+        case pvUByte:
+            status = doComputeCentroidT<uint8>(pArray, pStats);
             break;
-        case NDInt16:
-            status = doComputeCentroidT<epicsInt16>(pArray, pStats);
+        case pvShort:
+            status = doComputeCentroidT<int16>(pArray, pStats);
             break;
-        case NDUInt16:
-            status = doComputeCentroidT<epicsUInt16>(pArray, pStats);
+        case pvUShort:
+            status = doComputeCentroidT<uint16>(pArray, pStats);
             break;
-        case NDInt32:
-            status = doComputeCentroidT<epicsInt32>(pArray, pStats);
+        case pvInt:
+            status = doComputeCentroidT<int32>(pArray, pStats);
             break;
-        case NDUInt32:
-            status = doComputeCentroidT<epicsUInt32>(pArray, pStats);
+        case pvUInt:
+            status = doComputeCentroidT<uint32>(pArray, pStats);
             break;
-        case NDFloat32:
-            status = doComputeCentroidT<epicsFloat32>(pArray, pStats);
+        case pvLong:
+            status = doComputeCentroidT<int64>(pArray, pStats);
             break;
-        case NDFloat64:
-            status = doComputeCentroidT<epicsFloat64>(pArray, pStats);
+        case pvULong:
+            status = doComputeCentroidT<uint64>(pArray, pStats);
+            break;
+        case pvFloat:
+            status = doComputeCentroidT<float>(pArray, pStats);
+            break;
+        case pvDouble:
+            status = doComputeCentroidT<double>(pArray, pStats);
             break;
         default:
             status = asynError;
         break;
     }
-    return(status);
+    return status;
 }
 
 template <typename epicsType>
-asynStatus NDPluginStats::doComputeProfilesT(NDArray *pArray, NDStats_t *pStats)
+asynStatus NDPluginStats::doComputeProfilesT(NDArrayConstPtr pArray, NDStats_t *pStats)
 {
-    epicsType *pData = (epicsType *)pArray->pData;
-    epicsType *pCentroid, *pCursor;
+    const epicsType *pData = pArray->viewData<epicsType>().data();
+    const epicsType *pCentroid, *pCursor;
     size_t ix, iy;
 
-    if (pArray->ndims > 2) return(asynError);
+    if (pArray->getDimensions().size() > 2) return(asynError);
 
     /* Compute the X and Y profiles at the centroid and cursor positions */
     iy = (size_t) (pStats->centroidY + 0.5);
@@ -359,34 +379,40 @@ asynStatus NDPluginStats::doComputeProfilesT(NDArray *pArray, NDStats_t *pStats)
     return(asynSuccess);
 }
 
-asynStatus NDPluginStats::doComputeProfiles(NDArray *pArray, NDStats_t *pStats)
+asynStatus NDPluginStats::doComputeProfiles(NDArrayConstPtr pArray, NDStats_t *pStats)
 {
     asynStatus status;
 
-    switch(pArray->dataType) {
-        case NDInt8:
-            status = doComputeProfilesT<epicsInt8>(pArray, pStats);
+    switch(pArray->getDataType()) {
+        case pvByte:
+            status = doComputeProfilesT<int8>(pArray, pStats);
             break;
-        case NDUInt8:
-            status = doComputeProfilesT<epicsUInt8>(pArray, pStats);
+        case pvUByte:
+            status = doComputeProfilesT<uint8>(pArray, pStats);
             break;
-        case NDInt16:
-            status = doComputeProfilesT<epicsInt16>(pArray, pStats);
+        case pvShort:
+            status = doComputeProfilesT<int16>(pArray, pStats);
             break;
-        case NDUInt16:
-            status = doComputeProfilesT<epicsUInt16>(pArray, pStats);
+        case pvUShort:
+            status = doComputeProfilesT<uint16>(pArray, pStats);
             break;
-        case NDInt32:
-            status = doComputeProfilesT<epicsInt32>(pArray, pStats);
+        case pvInt:
+            status = doComputeProfilesT<int32>(pArray, pStats);
             break;
-        case NDUInt32:
-            status = doComputeProfilesT<epicsUInt32>(pArray, pStats);
+        case pvUInt:
+            status = doComputeProfilesT<uint32>(pArray, pStats);
             break;
-        case NDFloat32:
-            status = doComputeProfilesT<epicsFloat32>(pArray, pStats);
+        case pvLong:
+            status = doComputeProfilesT<int64>(pArray, pStats);
             break;
-        case NDFloat64:
-            status = doComputeProfilesT<epicsFloat64>(pArray, pStats);
+        case pvULong:
+            status = doComputeProfilesT<uint64>(pArray, pStats);
+            break;
+        case pvFloat:
+            status = doComputeProfilesT<float>(pArray, pStats);
+            break;
+        case pvDouble:
+            status = doComputeProfilesT<double>(pArray, pStats);
             break;
         default:
             status = asynError;
@@ -403,10 +429,10 @@ void NDPluginStats::doTimeSeriesCallbacks()
 
     doCallbacksFloat64Array(this->timeSeries[TSMinValue],   currentPoint, NDPluginStatsTSMinValue, 0);
     doCallbacksFloat64Array(this->timeSeries[TSMinX],       currentPoint, NDPluginStatsTSMinX,     0);
-    doCallbacksFloat64Array(this->timeSeries[TSMinY],       currentPoint, NDPluginStatsTSMinY,     0);            
+    doCallbacksFloat64Array(this->timeSeries[TSMinY],       currentPoint, NDPluginStatsTSMinY,     0);
     doCallbacksFloat64Array(this->timeSeries[TSMaxValue],   currentPoint, NDPluginStatsTSMaxValue, 0);
     doCallbacksFloat64Array(this->timeSeries[TSMaxX],       currentPoint, NDPluginStatsTSMaxX,     0);
-    doCallbacksFloat64Array(this->timeSeries[TSMaxY],       currentPoint, NDPluginStatsTSMaxY,     0);                
+    doCallbacksFloat64Array(this->timeSeries[TSMaxY],       currentPoint, NDPluginStatsTSMaxY,     0);
     doCallbacksFloat64Array(this->timeSeries[TSMeanValue],  currentPoint, NDPluginStatsTSMeanValue, 0);
     doCallbacksFloat64Array(this->timeSeries[TSSigmaValue], currentPoint, NDPluginStatsTSSigmaValue, 0);
     doCallbacksFloat64Array(this->timeSeries[TSTotal],      currentPoint, NDPluginStatsTSTotal, 0);
@@ -431,31 +457,31 @@ void NDPluginStats::doTimeSeriesCallbacks()
   * Does image statistics.
   * \param[in] pArray  The NDArray from the callback.
   */
-void NDPluginStats::processCallbacks(NDArray *pArray)
+void NDPluginStats::processCallbacks(NDArrayConstPtr pArray)
 {
     /* This function does array statistics.
      * It is called with the mutex already locked.  It unlocks it during long calculations when private
      * structures don't need to be protected.
      */
-    NDDimension_t bgdDims[ND_ARRAY_MAX_DIMS], *pDim;
+    NDDimension_t *pDim;
     size_t bgdPixels;
     int bgdWidth;
-    int dim;
+    size_t dim;
     NDStats_t stats, *pStats=&stats, statsTemp, *pStatsTemp=&statsTemp;
     double bgdCounts, avgBgd;
-    NDArray *pBgdArray=NULL;
+    NDArrayPtr pBgdArray;
     int computeStatistics, computeCentroid, computeProfiles, computeHistogram;
     size_t sizeX=0, sizeY=0;
     int i;
     int numTSPoints, currentTSPoint, TSAcquiring;
     int itemp;
-    NDArrayInfo arrayInfo;
+    NDArrayInfo_t arrayInfo;
     static const char* functionName = "processCallbacks";
 
     /* Call the base class method */
     NDPluginDriver::beginProcessCallbacks(pArray);
     
-    pArray->getInfo(&arrayInfo);
+    arrayInfo = pArray->getInfo();
     getIntegerParam(NDPluginStatsComputeStatistics,  &computeStatistics);
     getIntegerParam(NDPluginStatsComputeCentroid,    &computeCentroid);
     getIntegerParam(NDPluginStatsComputeProfiles,    &computeProfiles);
@@ -468,10 +494,12 @@ void NDPluginStats::processCallbacks(NDArray *pArray)
     getDoubleParam (NDPluginStatsHistMax,  &pStats->histMax);
     getDoubleParam (NDPluginStatsCentroidThreshold,  &pStats->centroidThreshold);
   
-    if (pArray->ndims > 0) sizeX = pArray->dims[0].size;
-    if (pArray->ndims == 1) sizeY = 1;
-    if (pArray->ndims > 1)  sizeY = pArray->dims[1].size;
+    vector<NDDimension_t> dims(pArray->getDimensions());
+    if (dims.size() > 0) sizeX = dims[0].size;
+    if (dims.size() == 1) sizeY = 1;
+    if (dims.size() > 1)  sizeY = dims[1].size;
 
+    vector<NDDimension_t> bgdDims(dims.size());
     
     if (computeCentroid || computeProfiles) {
         pStats->profileSizeX = sizeX;
@@ -504,15 +532,15 @@ void NDPluginStats::processCallbacks(NDArray *pArray)
             bgdPixels = 0;
             bgdCounts = 0.;
             /* Initialize the dimensions of the background array */
-            for (dim=0; dim<pArray->ndims; dim++) {
-                pArray->initDimension(&bgdDims[dim], pArray->dims[dim].size);
+            for (dim=0; dim<dims.size(); dim++) {
+                NDArray::initDimension(bgdDims[dim],dims[dim].size);
             }
-            for (dim=0; dim<pArray->ndims; dim++) {
+            for (dim=0; dim<dims.size(); dim++) {
                 pDim = &bgdDims[dim];
                 pDim->offset = 0;
                 pDim->size = MIN((size_t)bgdWidth, pDim->size);
-                this->pNDArrayPool->convert(pArray, &pBgdArray, pArray->dataType, bgdDims);
-                pDim->size = pArray->dims[dim].size;
+                pBgdArray = NDArrayPool_.convert(pArray, pArray->getDataType(), bgdDims);
+                pDim->size = dims[dim].size;
                 if (!pBgdArray) {
                     asynPrint(this->pasynUserSelf, ASYN_TRACE_ERROR,
                         "%s::%s, error allocating array buffer in convert\n",
@@ -520,14 +548,13 @@ void NDPluginStats::processCallbacks(NDArray *pArray)
                     continue;
                 }
                 doComputeStatistics(pBgdArray, pStatsTemp);
-                pBgdArray->release();
                 bgdPixels += pStatsTemp->nElements;
                 bgdCounts += pStatsTemp->total;
                 pDim->offset = MAX(0, (int)(pDim->size - bgdWidth));
-                pDim->size = MIN((size_t)bgdWidth, pArray->dims[dim].size - pDim->offset);
-                this->pNDArrayPool->convert(pArray, &pBgdArray, pArray->dataType, bgdDims);
+                pDim->size = MIN((size_t)bgdWidth, dims[dim].size - pDim->offset);
+                pBgdArray = NDArrayPool_.convert(pArray, pArray->getDataType(), bgdDims);
                 pDim->offset = 0;
-                pDim->size = pArray->dims[dim].size;
+                pDim->size = dims[dim].size;
                 if (!pBgdArray) {
                     asynPrint(this->pasynUserSelf, ASYN_TRACE_ERROR,
                         "%s::%s, error allocating array buffer in convert\n",
@@ -535,7 +562,6 @@ void NDPluginStats::processCallbacks(NDArray *pArray)
                     continue;
                 }
                 doComputeStatistics(pBgdArray, pStatsTemp);
-                pBgdArray->release();
                 bgdPixels += pStatsTemp->nElements;
                 bgdCounts += pStatsTemp->total;
             }
@@ -566,10 +592,10 @@ void NDPluginStats::processCallbacks(NDArray *pArray)
     if (TSAcquiring) {
         timeSeries[TSMinValue][currentTSPoint]    = pStats->min;
         timeSeries[TSMinX][currentTSPoint]        = (double)pStats->minX;
-        timeSeries[TSMinY][currentTSPoint]        = (double)pStats->minY;                        
+        timeSeries[TSMinY][currentTSPoint]        = (double)pStats->minY;
         timeSeries[TSMaxValue][currentTSPoint]    = pStats->max;
         timeSeries[TSMaxX][currentTSPoint]        = (double)pStats->maxX;
-        timeSeries[TSMaxY][currentTSPoint]        = (double)pStats->maxY;                                
+        timeSeries[TSMaxY][currentTSPoint]        = (double)pStats->maxY;
         timeSeries[TSMeanValue][currentTSPoint]   = pStats->mean;
         timeSeries[TSSigmaValue][currentTSPoint]  = pStats->sigma;
         timeSeries[TSTotal][currentTSPoint]       = pStats->total;
@@ -586,7 +612,7 @@ void NDPluginStats::processCallbacks(NDArray *pArray)
         timeSeries[TSKurtosisY][currentTSPoint]       = pStats->kurtosisY;
         timeSeries[TSEccentricity][currentTSPoint]    = pStats->eccentricity;
         timeSeries[TSOrientation][currentTSPoint]     = pStats->orientation;
-        timeSeries[TSTimestamp][currentTSPoint]       = pArray->timeStamp;
+        timeSeries[TSTimestamp][currentTSPoint]       = pArray->getTimeStamp().toSeconds();
         currentTSPoint++;
         setIntegerParam(NDPluginStatsTSCurrentPoint, currentTSPoint);
         if (currentTSPoint >= numTSPoints) {
@@ -598,17 +624,17 @@ void NDPluginStats::processCallbacks(NDArray *pArray)
     if (computeStatistics) {
         setDoubleParam(NDPluginStatsMinValue,    pStats->min);
         setDoubleParam(NDPluginStatsMinX,        (double)pStats->minX);
-        setDoubleParam(NDPluginStatsMinY,        (double)pStats->minY);                        
+        setDoubleParam(NDPluginStatsMinY,        (double)pStats->minY);
         setDoubleParam(NDPluginStatsMaxValue,    pStats->max);
         setDoubleParam(NDPluginStatsMaxX,        (double)pStats->maxX);
-        setDoubleParam(NDPluginStatsMaxY,        (double)pStats->maxY);                                
+        setDoubleParam(NDPluginStatsMaxY,        (double)pStats->maxY);
         setDoubleParam(NDPluginStatsMeanValue,   pStats->mean);
         setDoubleParam(NDPluginStatsSigmaValue,  pStats->sigma);
         setDoubleParam(NDPluginStatsTotal,       pStats->total);
         setDoubleParam(NDPluginStatsNet,         pStats->net);
-        asynPrint(this->pasynUserSelf, ASYN_TRACEIO_DRIVER,
+        /*asynPrint(this->pasynUserSelf, ASYN_TRACEIO_DRIVER,
             "%s:%s min=%f, max=%f, mean=%f, total=%f, net=%f\n",
-            driverName, functionName, pStats->min, pStats->max, pStats->mean, pStats->total, pStats->net);
+            driverName, functionName, pStats->min, pStats->max, pStats->mean, pStats->total, pStats->net);*/
     } 
 
     if (computeCentroid) {
@@ -692,7 +718,6 @@ asynStatus NDPluginStats::writeInt32(asynUser *pasynUser, epicsInt32 value)
     int i;
     int numPoints, currentPoint;
     static const char *functionName = "writeInt32";
-
 
     /* Set the parameter in the parameter library. */
     status = (asynStatus) setIntegerParam(function, value);
@@ -799,8 +824,6 @@ asynStatus  NDPluginStats::writeFloat64(asynUser *pasynUser, epicsFloat64 value)
     return status;
 }
 
-
-
 /** Constructor for NDPluginStats; most parameters are simply passed to NDPluginDriver::NDPluginDriver.
   * After calling the base class constructor this method sets reasonable default values for all of the
   * parameters.
@@ -821,13 +844,14 @@ asynStatus  NDPluginStats::writeFloat64(asynUser *pasynUser, epicsFloat64 value)
   * \param[in] stackSize The stack size for the asyn port driver thread if ASYN_CANBLOCK is set in asynFlags.
   * \param[in] maxThreads The maximum number of threads this driver is allowed to use. If 0 then 1 will be used.
   */
-NDPluginStats::NDPluginStats(const char *portName, int queueSize, int blockingCallbacks,
-                         const char *NDArrayPort, int NDArrayAddr,
+NDPluginStats::NDPluginStats(const char *portName, string const & pvName,
+                         int queueSize, int blockingCallbacks,
+                         string const & ndArrayPv,
                          int maxBuffers, size_t maxMemory,
                          int priority, int stackSize, int maxThreads)
     /* Invoke the base class constructor */
-    : NDPluginDriver(portName, queueSize, blockingCallbacks,
-                   NDArrayPort, NDArrayAddr, 1, maxBuffers, maxMemory,
+    : NDPluginDriver(portName, pvName, queueSize, blockingCallbacks,
+                   ndArrayPv, 1, maxBuffers, maxMemory,
                    asynInt32ArrayMask | asynFloat64ArrayMask | asynGenericPointerMask,
                    asynInt32ArrayMask | asynFloat64ArrayMask | asynGenericPointerMask,
                    0, 1, priority, stackSize, maxThreads)
@@ -841,10 +865,10 @@ NDPluginStats::NDPluginStats(const char *portName, int queueSize, int blockingCa
     createParam(NDPluginStatsBgdWidthString,          asynParamInt32,      &NDPluginStatsBgdWidth);
     createParam(NDPluginStatsMinValueString,          asynParamFloat64,    &NDPluginStatsMinValue);
     createParam(NDPluginStatsMinXString,              asynParamFloat64,    &NDPluginStatsMinX);
-    createParam(NDPluginStatsMinYString,              asynParamFloat64,    &NDPluginStatsMinY);            
+    createParam(NDPluginStatsMinYString,              asynParamFloat64,    &NDPluginStatsMinY);
     createParam(NDPluginStatsMaxValueString,          asynParamFloat64,    &NDPluginStatsMaxValue);
     createParam(NDPluginStatsMaxXString,              asynParamFloat64,    &NDPluginStatsMaxX);
-    createParam(NDPluginStatsMaxYString,              asynParamFloat64,    &NDPluginStatsMaxY);                
+    createParam(NDPluginStatsMaxYString,              asynParamFloat64,    &NDPluginStatsMaxY);
     createParam(NDPluginStatsMeanValueString,         asynParamFloat64,    &NDPluginStatsMeanValue);
     createParam(NDPluginStatsSigmaValueString,        asynParamFloat64,    &NDPluginStatsSigmaValue);
     createParam(NDPluginStatsTotalString,             asynParamFloat64,    &NDPluginStatsTotal);
@@ -873,10 +897,10 @@ NDPluginStats::NDPluginStats(const char *portName, int queueSize, int blockingCa
     createParam(NDPluginStatsTSAcquiringString,       asynParamInt32,        &NDPluginStatsTSAcquiring);
     createParam(NDPluginStatsTSMinValueString,        asynParamFloat64Array, &NDPluginStatsTSMinValue);
     createParam(NDPluginStatsTSMinXString,            asynParamFloat64Array, &NDPluginStatsTSMinX);
-    createParam(NDPluginStatsTSMinYString,            asynParamFloat64Array, &NDPluginStatsTSMinY);            
+    createParam(NDPluginStatsTSMinYString,            asynParamFloat64Array, &NDPluginStatsTSMinY);
     createParam(NDPluginStatsTSMaxValueString,        asynParamFloat64Array, &NDPluginStatsTSMaxValue);
     createParam(NDPluginStatsTSMaxXString,            asynParamFloat64Array, &NDPluginStatsTSMaxX);
-    createParam(NDPluginStatsTSMaxYString,            asynParamFloat64Array, &NDPluginStatsTSMaxY);                
+    createParam(NDPluginStatsTSMaxYString,            asynParamFloat64Array, &NDPluginStatsTSMaxY);
     createParam(NDPluginStatsTSMeanValueString,       asynParamFloat64Array, &NDPluginStatsTSMeanValue);
     createParam(NDPluginStatsTSSigmaValueString,      asynParamFloat64Array, &NDPluginStatsTSSigmaValue);
     createParam(NDPluginStatsTSTotalString,           asynParamFloat64Array, &NDPluginStatsTSTotal);
@@ -937,22 +961,24 @@ NDPluginStats::NDPluginStats(const char *portName, int queueSize, int blockingCa
 }
 
 /** Configuration command */
-extern "C" int NDStatsConfigure(const char *portName, int queueSize, int blockingCallbacks,
-                                 const char *NDArrayPort, int NDArrayAddr,
+extern "C" int NDStatsConfigure(const char *portName, const char *pvName,
+                                 int queueSize, int blockingCallbacks,
+                                 const char * ndArrayPv,
                                  int maxBuffers, size_t maxMemory,
                                  int priority, int stackSize, int maxThreads)
 {
-    NDPluginStats *pPlugin = new NDPluginStats(portName, queueSize, blockingCallbacks, NDArrayPort, NDArrayAddr,
-                                              maxBuffers, maxMemory, priority, stackSize, maxThreads);
+    NDPluginStats *pPlugin = new NDPluginStats(portName, pvName, queueSize, blockingCallbacks,
+                                              ndArrayPv, maxBuffers, maxMemory, priority, stackSize,
+                                              maxThreads);
     return pPlugin->start();
 }
 
 /* EPICS iocsh shell commands */
 static const iocshArg initArg0 = { "portName",iocshArgString};
-static const iocshArg initArg1 = { "frame queue size",iocshArgInt};
-static const iocshArg initArg2 = { "blocking callbacks",iocshArgInt};
-static const iocshArg initArg3 = { "NDArrayPort",iocshArgString};
-static const iocshArg initArg4 = { "NDArrayAddr",iocshArgInt};
+static const iocshArg initArg1 = { "pvName",iocshArgString};
+static const iocshArg initArg2 = { "frame queue size",iocshArgInt};
+static const iocshArg initArg3 = { "blocking callbacks",iocshArgInt};
+static const iocshArg initArg4 = { "ndArrayPv",iocshArgString};
 static const iocshArg initArg5 = { "maxBuffers",iocshArgInt};
 static const iocshArg initArg6 = { "maxMemory",iocshArgInt};
 static const iocshArg initArg7 = { "priority",iocshArgInt};
@@ -971,8 +997,8 @@ static const iocshArg * const initArgs[] = {&initArg0,
 static const iocshFuncDef initFuncDef = {"NDStatsConfigure",10,initArgs};
 static void initCallFunc(const iocshArgBuf *args)
 {
-    NDStatsConfigure(args[0].sval, args[1].ival, args[2].ival,
-                     args[3].sval, args[4].ival, args[5].ival,
+    NDStatsConfigure(args[0].sval, args[1].sval, args[2].ival,
+                     args[3].ival, args[4].sval, args[5].ival,
                      args[6].ival, args[7].ival, args[8].ival,
                      args[9].ival);
 }

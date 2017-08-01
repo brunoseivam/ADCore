@@ -12,11 +12,11 @@ pluginSrc_DEPEND_DIRS += ADSrc
 DIRS += pluginTests
 pluginTests_DEPEND_DIRS += pluginSrc
 
-ifeq ($(WITH_EPICS_V4), YES)
-  DIRS += ntndArrayConverterSrc
-  ntndArrayConverterSrc_DEPEND_DIRS += ADSrc
-  pluginSrc_DEPEND_DIRS += ntndArrayConverterSrc
-endif
+#ifeq ($(WITH_EPICS_V4), YES)
+#  DIRS += ntndArrayConverterSrc
+#  ntndArrayConverterSrc_DEPEND_DIRS += ADSrc
+#  pluginSrc_DEPEND_DIRS += ntndArrayConverterSrc
+#endif
 
 include $(TOP)/configure/RULES_DIRS
 

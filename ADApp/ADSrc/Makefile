@@ -22,11 +22,13 @@ INC += ADCoreVersion.h
 INC += NDAttribute.h
 INC += NDAttributeList.h
 INC += NDArray.h
+INC += NDArrayPool.h
 INC += PVAttribute.h
 INC += paramAttribute.h
 INC += functAttribute.h
 INC += asynNDArrayDriver.h
 INC += ADDriver.h
+INC += NDArrayParam.h
 
 LIBRARY_IOC = ADBase
 LIB_SRCS += NDAttribute.cpp
@@ -36,6 +38,7 @@ LIB_SRCS += NDArray.cpp
 LIB_SRCS += asynNDArrayDriver.cpp
 LIB_SRCS += ADDriver.cpp
 LIB_SRCS += paramAttribute.cpp
+LIB_SRCS += NDArrayParam.cpp
 ifeq ($(EPICS_LIBCOM_ONLY),YES)
   USR_CXXFLAGS += -DEPICS_LIBCOM_ONLY
 else

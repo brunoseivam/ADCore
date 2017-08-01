@@ -149,22 +149,10 @@ int paramAttribute::updateValue()
     if (status && status != asynParamUndefined) {
         asynPrint(pasynUserSelf, ASYN_TRACE_ERROR,
             "%s:%s: ERROR reading parameter attribute value, name=%s, source=%s, type=%d\n",
-            driverName, functionName, this->getName(), this->getSource(), this->paramType);
+            driverName, functionName, getName().c_str(), getSource().c_str(), this->paramType);
     }
     return(status);
 }
-
-paramAttribute* paramAttribute::copy(NDAttribute *pAttr)
-{
-  paramAttribute *pOut = (paramAttribute *)pAttr;
-  if (!pOut) 
-    pOut = new paramAttribute(*this);
-  else {
-    NDAttribute::copy(pOut);
-  }
-  return(pOut);
-}
-
 
 /** Reports on the properties of the paramAttribute object; 
   * calls base class NDAttribute::report() to report on the parameter value.

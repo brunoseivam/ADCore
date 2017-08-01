@@ -4,7 +4,7 @@ LIB_LIBS += ADBase
 LIB_LIBS += asyn
 
 ifeq ($(WITH_EPICS_V4),YES)
-  LIB_LIBS += ntndArrayConverter
+  #LIB_LIBS += ntndArrayConverter
   LIB_LIBS += nt
   LIB_LIBS += pvDatabase
   LIB_LIBS += pvAccess

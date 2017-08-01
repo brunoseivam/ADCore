@@ -18,6 +18,8 @@
 #include <epicsExport.h>
 #include "ADDriver.h"
 
+using std::string;
+
 static const char *driverName = "ADDriver";
 
 /** Set the shutter position.
@@ -88,7 +90,6 @@ asynStatus ADDriver::writeInt32(asynUser *pasynUser, epicsInt32 value)
     return status;
 }
 
-
 /** All of the arguments are simply passed to the constructor for the asynNDArrayDriver base class, 
   * except numParams.  As of R3-0 numParams is no longer used in asynNDArrayDriver but we have left 
   * it in here to avoid needing to change all drivers yet. In R5-0 we expect to remove maxBuffers and
@@ -96,11 +97,12 @@ asynStatus ADDriver::writeInt32(asynUser *pasynUser, epicsInt32 value)
   * After calling the base class constructor this method sets reasonable default values for all of the parameters
   * defined in ADDriver.h.
   */
-ADDriver::ADDriver(const char *portName, int maxAddr, int numParams, int maxBuffers, size_t maxMemory,
+ADDriver::ADDriver(const char *portName, string const & arrayName, int maxAddr,
+                   int numParams, int maxBuffers, size_t maxMemory,
                    int interfaceMask, int interruptMask,
                    int asynFlags, int autoConnect, int priority, int stackSize)
 
-    : asynNDArrayDriver(portName, maxAddr, maxBuffers, maxMemory,
+    : asynNDArrayDriver(portName, arrayName, maxAddr, maxBuffers, maxMemory,
           interfaceMask | asynInt32Mask | asynFloat64Mask | asynOctetMask | asynGenericPointerMask | asynDrvUserMask,
           interruptMask | asynInt32Mask | asynFloat64Mask | asynOctetMask | asynGenericPointerMask,
           asynFlags, autoConnect, priority, stackSize)

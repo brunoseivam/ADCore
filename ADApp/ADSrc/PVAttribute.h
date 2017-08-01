@@ -27,7 +27,6 @@ public:
     PVAttribute(const char *pName, const char *pDescription, const char *pSource, chtype dbrType);
     PVAttribute(PVAttribute& attribute);
     ~PVAttribute();
-    PVAttribute* copy(NDAttribute *pAttribute);
     virtual int updateValue();
     /* These callbacks must be public because they are called from C */
     void connectCallback(struct connection_handler_args cha);
@@ -38,7 +37,17 @@ private:
     chid        chanId;
     evid        eventId;
     chtype      dbrType;
-    NDAttrValue callbackValue;
+    union
+    {
+        epicsInt8 i8;
+        epicsUInt8 ui8;
+        epicsInt16 i16;
+        epicsUInt16 ui16;
+        epicsInt32 i32;
+        epicsUInt32 ui32;
+        epicsFloat32 f32;
+        epicsFloat64 f64;
+    }callbackValue;
     char        *callbackString;
     bool        connectedOnce;
     epicsMutexId lock;

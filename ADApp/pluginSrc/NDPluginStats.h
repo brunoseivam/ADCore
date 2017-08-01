@@ -186,23 +186,24 @@ typedef struct NDStats {
   */
 class epicsShareClass NDPluginStats : public NDPluginDriver {
 public:
-    NDPluginStats(const char *portName, int queueSize, int blockingCallbacks, 
-                 const char *NDArrayPort, int NDArrayAddr,
+    NDPluginStats(const char *portName, std::string const & pvName,
+                 int queueSize, int blockingCallbacks,
+                 std::string const & ndArrayPv,
                  int maxBuffers, size_t maxMemory,
                  int priority, int stackSize, int maxThreads=1);
     /* These methods override the virtual methods in the base class */
-    void processCallbacks(NDArray *pArray);
+    void processCallbacks(NDArrayConstPtr pArray);
     asynStatus writeInt32(asynUser *pasynUser, epicsInt32 value);
     asynStatus writeFloat64(asynUser *pasynUser, epicsFloat64 value);
     
-    template <typename epicsType> void doComputeStatisticsT(NDArray *pArray, NDStats_t *pStats);
-    int doComputeStatistics(NDArray *pArray, NDStats_t *pStats);
-    template <typename epicsType> asynStatus doComputeCentroidT(NDArray *pArray, NDStats_t *pStats);
-    asynStatus doComputeCentroid(NDArray *pArray, NDStats_t *pStats);
-    template <typename epicsType> asynStatus doComputeProfilesT(NDArray *pArray, NDStats_t *pStats);
-    asynStatus doComputeProfiles(NDArray *pArray, NDStats_t *pStats);
-    template <typename epicsType> asynStatus doComputeHistogramT(NDArray *pArray, NDStats_t *pStats);
-    asynStatus doComputeHistogram(NDArray *pArray, NDStats_t *pStats);
+    template <typename epicsType> void doComputeStatisticsT(NDArrayConstPtr pArray, NDStats_t *pStats);
+    asynStatus doComputeStatistics(NDArrayConstPtr pArray, NDStats_t *pStats);
+    template <typename epicsType> asynStatus doComputeCentroidT(NDArrayConstPtr pArray, NDStats_t *pStats);
+    asynStatus doComputeCentroid(NDArrayConstPtr pArray, NDStats_t *pStats);
+    template <typename epicsType> asynStatus doComputeProfilesT(NDArrayConstPtr pArray, NDStats_t *pStats);
+    asynStatus doComputeProfiles(NDArrayConstPtr pArray, NDStats_t *pStats);
+    template <typename epicsType> asynStatus doComputeHistogramT(NDArrayConstPtr pArray, NDStats_t *pStats);
+    asynStatus doComputeHistogram(NDArrayConstPtr pArray, NDStats_t *pStats);
    
 protected:
     int NDPluginStatsComputeStatistics;
@@ -211,10 +212,10 @@ protected:
     int NDPluginStatsBgdWidth;
     int NDPluginStatsMinValue;
     int NDPluginStatsMinX;
-    int NDPluginStatsMinY;            
+    int NDPluginStatsMinY;
     int NDPluginStatsMaxValue;
     int NDPluginStatsMaxX;
-    int NDPluginStatsMaxY;        
+    int NDPluginStatsMaxY;
     int NDPluginStatsMeanValue;
     int NDPluginStatsSigmaValue;
     int NDPluginStatsTotal;
@@ -243,10 +244,10 @@ protected:
     int NDPluginStatsTSAcquiring;
     int NDPluginStatsTSMinValue;
     int NDPluginStatsTSMinX;
-    int NDPluginStatsTSMinY;                
+    int NDPluginStatsTSMinY;
     int NDPluginStatsTSMaxValue;
     int NDPluginStatsTSMaxX;
-    int NDPluginStatsTSMaxY;            
+    int NDPluginStatsTSMaxY;
     int NDPluginStatsTSMeanValue;
     int NDPluginStatsTSSigmaValue;
     int NDPluginStatsTSTotal;

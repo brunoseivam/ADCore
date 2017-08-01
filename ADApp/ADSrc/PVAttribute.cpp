@@ -95,20 +95,6 @@ PVAttribute::~PVAttribute()
     if (this->lock) epicsMutexDestroy(this->lock);
 }
 
-
-PVAttribute* PVAttribute::copy(NDAttribute *pAttr)
-{
-  PVAttribute *pOut = (PVAttribute *)pAttr;
-  if (!pOut) 
-    pOut = new PVAttribute(*this);
-  else {
-    // NOTE: We assume that if the attribute name is the same then the source PV and dbrTtype
-    // are also the same
-    NDAttribute::copy(pOut);
-  }
-  return(pOut);
-}
-
 static void monitorCallbackC(struct event_handler_args cha)
 {
     PVAttribute *pAttribute = (PVAttribute *)ca_puser(cha.chid);
@@ -129,7 +115,7 @@ void PVAttribute::monitorCallback(struct event_handler_args eha)
     epicsMutexLock(this->lock);
     asynPrint(pasynUserSelf, ASYN_TRACE_FLOW, 
         "%s:%s: PV=%s\n", 
-        driverName, functionName, this->getSource());
+        driverName, functionName, this->getSource().c_str());
 
     if (eha.status != ECA_NORMAL) {
         asynPrint(pasynUserSelf,  ASYN_TRACE_ERROR,
@@ -227,7 +213,7 @@ void PVAttribute::connectCallback(struct connection_handler_args cha)
         elementCount = ca_element_count(chanId);
         asynPrint(pasynUserSelf, ASYN_TRACE_FLOW, 
             "%s:%s: Connect event, PV=%s, chanId=%p, dbfType=%ld, elementCount=%d, dbrType=%ld\n", 
-            driverName, functionName, this->getSource(), chanId, dbfType, elementCount, dbrType);
+            driverName, functionName, this->getSource().c_str(), chanId, dbfType, elementCount, dbrType);
         switch(dbfType) {
             case DBF_STRING:
                 if (this->dbrType == DBR_NATIVE) dbrType = DBR_STRING;
@@ -295,7 +281,7 @@ void PVAttribute::connectCallback(struct connection_handler_args cha)
         }
         asynPrint(pasynUserSelf, ASYN_TRACE_FLOW, 
             "%s:%s: Connect event, PV=%s, chanId=%p, type=%d\n", 
-            driverName, functionName, this->getSource(), chanId, dataType);
+            driverName, functionName, this->getSource().c_str(), chanId, dataType);
         this->setDataType(dataType);
             
         /* Set value change callback on this PV */
@@ -311,7 +297,7 @@ void PVAttribute::connectCallback(struct connection_handler_args cha)
         /* This is a disconnection event */
         asynPrint(pasynUserSelf, ASYN_TRACE_FLOW, 
             "%s:%s: Disconnect event, PV=%s, chanId=%p\n", 
-            driverName, functionName, this->getSource(), chanId);
+            driverName, functionName, this->getSource().c_str(), chanId);
     }
     done:
     epicsMutexUnlock(this->lock);

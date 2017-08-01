@@ -27,6 +27,7 @@
 
 #include <asynDriver.h>
 
+#include <pv/channelProviderLocal.h>
 
 #define epicsExportSharedSymbols
 #include <shareLib.h>
@@ -52,6 +53,9 @@
   #define delim "/"
   #define MKDIR(a,b) mkdir(a,b)
 #endif
+
+using std::string;
+namespace pvdb = epics::pvDatabase;
 
 static const char *driverName = "asynNDArrayDriver";
 
@@ -319,7 +323,7 @@ asynStatus asynNDArrayDriver::readNDAttributesFile()
     getStringParam(NDAttributesMacros, attributesMacros);
 
     /* Clear any existing attributes */
-    this->pAttributeList->clear();
+    attributeList_.clear();
     if (fileName.length() == 0) return asynSuccess;
 
     infile.open(fileName.c_str());
@@ -429,8 +433,8 @@ done_macros:
                 "%s:%s: Name=%s, PVName=%s, pDBRType=%s, dbrType=%d, pDescription=%s\n",
                 driverName, functionName, pName, pSource, pDBRType, dbrType, pDescription);
 #ifndef EPICS_LIBCOM_ONLY
-            PVAttribute *pPVAttribute = new PVAttribute(pName, pDescription, pSource, dbrType);
-            this->pAttributeList->add(pPVAttribute);
+            NDAttributePtr pPVAttribute(new PVAttribute(pName, pDescription, pSource, dbrType));
+            attributeList_.add(pPVAttribute);
 #endif
         } else if (strcmp(pAttrType, NDAttribute::attrSourceString(NDAttrSourceParam)) == 0) {
             const char *pDataType = (const char *)xmlGetProp(Attr, (const xmlChar *)"datatype");
@@ -440,9 +444,9 @@ done_macros:
             if (pAddr) addr = strtol(pAddr, NULL, 0);
             asynPrint(pasynUserSelf, ASYN_TRACEIO_DRIVER,
                 "%s:%s: Name=%s, drvInfo=%s, dataType=%s,pDescription=%s\n",
-                driverName, functionName, pName, pSource, pDataType, pDescription); 
-            paramAttribute *pParamAttribute = new paramAttribute(pName, pDescription, pSource, addr, this, pDataType);
-            this->pAttributeList->add(pParamAttribute);
+                driverName, functionName, pName, pSource, pDataType, pDescription);
+            NDAttributePtr pParamAttribute(new paramAttribute(pName, pDescription, pSource, addr, this, pDataType));
+            attributeList_.add(pParamAttribute);
         } else if (strcmp(pAttrType, NDAttribute::attrSourceString(NDAttrSourceFunct)) == 0) {
             const char *pParam = (const char *)xmlGetProp(Attr, (const xmlChar *)"param");
             if (!pParam) pParam = epicsStrDup("");
@@ -450,8 +454,8 @@ done_macros:
                 "%s:%s: Name=%s, function=%s, pParam=%s, pDescription=%s\n",
                 driverName, functionName, pName, pSource, pParam, pDescription); 
 #ifndef EPICS_LIBCOM_ONLY
-            functAttribute *pFunctAttribute = new functAttribute(pName, pDescription, pSource, pParam);
-            this->pAttributeList->add(pFunctAttribute);
+            NDAttributePtr pFunctAttribute(new functAttribute(pName, pDescription, pSource, pParam));
+            attributeList_.add(pFunctAttribute);
 #endif
         } else {
             asynPrint(pasynUserSelf, ASYN_TRACE_ERROR,
@@ -463,7 +467,7 @@ done_macros:
     // Wait a short while for channel access callbacks on EPICS PVs
     epicsThreadSleep(0.5);
     // Get the initial values
-    this->pAttributeList->updateValues();
+    attributeList_.updateValues();
     return asynSuccess;
 }
 
@@ -478,13 +482,13 @@ done_macros:
   * list from the NDArray they were passed in NDPluginDriver::processCallbacks, because
   * that modifies the original NDArray which is forbidden.
   */
-asynStatus asynNDArrayDriver::getAttributes(NDAttributeList *pList)
+asynStatus asynNDArrayDriver::getAttributes(NDAttributeListPtr & pList)
 {
     //const char *functionName = "getAttributes";
     int status = asynSuccess;
     
-    status = this->pAttributeList->updateValues();
-    status = this->pAttributeList->copy(pList);
+    status = attributeList_.updateValues();
+    status = attributeList_.copy(pList);
     return (asynStatus) status;
 }
 
@@ -547,6 +551,8 @@ asynStatus asynNDArrayDriver::writeOctet(asynUser *pasynUser, const char *value,
   */
 asynStatus asynNDArrayDriver::readGenericPointer(asynUser *pasynUser, void *genericPointer)
 {
+    return asynError;
+    /*
     NDArray *pArray = (NDArray *)genericPointer;
     NDArray *myArray;
     NDArrayInfo_t arrayInfo;
@@ -575,6 +581,7 @@ asynStatus asynNDArrayDriver::readGenericPointer(asynUser *pasynUser, void *gene
               driverName, functionName, (unsigned long)arrayInfo.totalBytes, pArray->pData);
     this->unlock();
     return status;
+    */
 }
 
 /** This method currently does nothing, but it should be implemented in this base class.
@@ -600,11 +607,11 @@ asynStatus asynNDArrayDriver::readInt32(asynUser *pasynUser, epicsInt32 *value)
 
     // Just read the status of the NDArrayPool
     if (function == NDPoolMaxBuffers) {
-        setIntegerParam(function, this->pNDArrayPool->maxBuffers());
+        setIntegerParam(function, NDArrayPool_.maxBuffers());
     } else if (function == NDPoolAllocBuffers) {
-        setIntegerParam(function, this->pNDArrayPool->numBuffers());
+        setIntegerParam(function, NDArrayPool_.numBuffers());
     } else if (function == NDPoolFreeBuffers) {
-        setIntegerParam(function, this->pNDArrayPool->numFree());
+        setIntegerParam(function, NDArrayPool_.numFree());
     }
 
     // Call base class
@@ -620,9 +627,9 @@ asynStatus asynNDArrayDriver::readFloat64(asynUser *pasynUser, epicsFloat64 *val
 
     // Just read the status of the NDArrayPool
     if (function == NDPoolMaxMemory) {
-        setDoubleParam(function, this->pNDArrayPool->maxMemory() / MEGABYTE_DBL);
+        setDoubleParam(function, NDArrayPool_.maxMemory() / MEGABYTE_DBL);
     } else if (function == NDPoolUsedMemory) {
-        setDoubleParam(function, this->pNDArrayPool->memorySize() / MEGABYTE_DBL);
+        setDoubleParam(function, NDArrayPool_.memorySize() / MEGABYTE_DBL);
     }
 
     // Call base class
@@ -648,20 +655,20 @@ void asynNDArrayDriver::report(FILE *fp, int details)
     if (details > 5) {
         fprintf(fp, "\n");
         fprintf(fp, "%s: NDArrayPool report\n", this->portName);
-        if (this->pNDArrayPool) this->pNDArrayPool->report(fp, details);
+        NDArrayPool_.report(fp, details);
         fprintf(fp, "\n");
-        fprintf(fp, "%s: pAttributeList report\n", this->portName);
-        this->pAttributeList->report(fp, details);
+        fprintf(fp, "%s: attributeList report\n", this->portName);
+        attributeList_.report(fp, details);
     }
 }
 
-
 /** This is the constructor for the asynNDArrayDriver class.
   * portName, maxAddr, interfaceMask, interruptMask, asynFlags, autoConnect, priority and stackSize
   * are simply passed to asynPortDriver::asynPortDriver. 
   * asynNDArrayDriver creates an NDArrayPool object to allocate NDArray
   * objects. maxBuffers and maxMemory are passed to NDArrayPool::NDArrayPool.
   * \param[in] portName The name of the asyn port driver to be created.
+  * \param[in] pvName The name of the PV name that will expose the NTNDArray.
   * \param[in] maxAddr The maximum  number of asyn addr addresses this driver supports. 1 is minimum.
   * \param[in] maxBuffers The maximum number of NDArray buffers that the NDArrayPool for this driver is 
   *            allowed to allocate. Set this to 0 to allow an unlimited number of buffers.
@@ -677,14 +684,15 @@ void asynNDArrayDriver::report(FILE *fp, int details)
   *            This value should also be used for any other threads this object creates.
   */
 
-asynNDArrayDriver::asynNDArrayDriver(const char *portName, int maxAddr, int maxBuffers,
+asynNDArrayDriver::asynNDArrayDriver(const char * portName, string const & pvName, int maxAddr, int maxBuffers,
                                      size_t maxMemory, int interfaceMask, int interruptMask,
                                      int asynFlags, int autoConnect, int priority, int stackSize)
     : asynPortDriver(portName, maxAddr, 0, 
                      interfaceMask | asynInt32Mask | asynFloat64Mask | asynOctetMask | asynInt32ArrayMask | asynGenericPointerMask | asynDrvUserMask, 
                      interruptMask | asynInt32Mask | asynFloat64Mask | asynOctetMask | asynInt32ArrayMask | asynGenericPointerMask,
                      asynFlags, autoConnect, priority, stackSize),
-      pNDArrayPool(NULL)
+      NDArrayData(NDArrayParam::create(pvName)), pArrays(maxAddr),
+      NDArrayPool_((size_t)maxBuffers, maxMemory), attributeList_()
 {
     char versionString[20];
 
@@ -694,12 +702,6 @@ asynNDArrayDriver::asynNDArrayDriver(const char *portName, int maxAddr, int maxB
     if (priority <= 0) priority = epicsThreadPriorityMedium;
     threadPriority_ = priority;
 
-    this->pNDArrayPool = new NDArrayPool(maxBuffers, maxMemory);
-
-    /* Allocate pArray pointer array */
-    this->pArrays = (NDArray **)calloc(maxAddr, sizeof(NDArray *));
-    this->pAttributeList = new NDAttributeList();
-    
     createParam(NDPortNameSelfString,         asynParamOctet,           &NDPortNameSelf);
     createParam(NDADCoreVersionString,        asynParamOctet,           &NDADCoreVersion);
     createParam(NDDriverVersionString,        asynParamOctet,           &NDDriverVersion);
@@ -741,7 +743,6 @@ asynNDArrayDriver::asynNDArrayDriver(const char *portName, int maxAddr, int maxB
     createParam(NDAttributesFileString,       asynParamOctet,           &NDAttributesFile);
     createParam(NDAttributesStatusString,     asynParamInt32,           &NDAttributesStatus);
     createParam(NDAttributesMacrosString,     asynParamOctet,           &NDAttributesMacros);
-    createParam(NDArrayDataString,            asynParamGenericPointer,  &NDArrayData);
     createParam(NDArrayCallbacksString,       asynParamInt32,           &NDArrayCallbacks);
     createParam(NDPoolMaxBuffersString,       asynParamInt32,           &NDPoolMaxBuffers);
     createParam(NDPoolAllocBuffersString,     asynParamInt32,           &NDPoolAllocBuffers);
@@ -794,17 +795,13 @@ asynNDArrayDriver::asynNDArrayDriver(const char *portName, int maxAddr, int maxB
     setIntegerParam(NDAttributesStatus, NDAttributesFileNotFound);
     setStringParam (NDAttributesMacros, "");
 
-    setIntegerParam(NDPoolMaxBuffers, this->pNDArrayPool->maxBuffers());
-    setIntegerParam(NDPoolAllocBuffers, this->pNDArrayPool->numBuffers());
-    setIntegerParam(NDPoolFreeBuffers, this->pNDArrayPool->numFree());
+    setIntegerParam(NDPoolMaxBuffers, NDArrayPool_.maxBuffers());
+    setIntegerParam(NDPoolAllocBuffers, NDArrayPool_.numBuffers());
+    setIntegerParam(NDPoolFreeBuffers, NDArrayPool_.numFree());
 
+    pvdb::PVDatabasePtr master(pvdb::PVDatabase::getMaster());
+    pvdb::ChannelProviderLocalPtr channelProvider(pvdb::getChannelProviderLocal());
+
+    if(!master->addRecord(NDArrayData))
+        throw std::runtime_error("couldn't add record to master database");
 }
-
-
-asynNDArrayDriver::~asynNDArrayDriver()
-{ 
-    delete this->pNDArrayPool;
-    free(this->pArrays);
-    delete this->pAttributeList;
-}    
-

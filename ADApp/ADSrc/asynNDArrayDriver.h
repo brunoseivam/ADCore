@@ -3,7 +3,10 @@
 
 #include "asynPortDriver.h"
 #include "NDArray.h"
+#include "NDArrayPool.h"
 #include "ADCoreVersion.h"
+#include "NDArrayParam.h"
+#include "NDAttributeList.h"
 
 /** Maximum length of a filename or any of its components */
 #define MAX_FILENAME_LEN 256
@@ -92,7 +95,6 @@ typedef enum {
 #define NDAttributesMacrosString  "ND_ATTRIBUTES_MACROS" /**< (asynOctet,    r/w) Attributes macros string */
 
 /* The detector array data */
-#define NDArrayDataString       "ARRAY_DATA"        /**< (asynGenericPointer,   r/w) NDArray data */
 #define NDArrayCallbacksString  "ARRAY_CALLBACKS"   /**< (asynInt32,    r/w) Do callbacks with array data (0=No, 1=Yes) */
 
 /* NDArray Pool status */
@@ -109,10 +111,11 @@ typedef enum {
   */
 class epicsShareFunc asynNDArrayDriver : public asynPortDriver {
 public:
-    asynNDArrayDriver(const char *portName, int maxAddr, int maxBuffers, size_t maxMemory,
+    asynNDArrayDriver(const char * portName, std::string const & pvName, int maxAddr,
+                      int maxBuffers, size_t maxMemory,
                       int interfaceMask, int interruptMask,
                       int asynFlags, int autoConnect, int priority, int stackSize);
-    virtual ~asynNDArrayDriver();
+
     /* These are the methods that we override from asynPortDriver */
     virtual asynStatus writeOctet(asynUser *pasynUser, const char *value, size_t maxChars,
                           size_t *nActual);
@@ -128,7 +131,7 @@ public:
     virtual asynStatus createFileName(int maxChars, char *fullFileName);
     virtual asynStatus createFileName(int maxChars, char *filePath, char *fileName);
     virtual asynStatus readNDAttributesFile();
-    virtual asynStatus getAttributes(NDAttributeList *pAttributeList);
+    virtual asynStatus getAttributes(NDAttributeListPtr & pAttributeList);
 
 protected:
     int NDPortNameSelf;
@@ -165,7 +168,7 @@ protected:
     int NDFileWriteMessage;
     int NDFileNumCapture;
     int NDFileNumCaptured;
-    int NDFileCapture;   
+    int NDFileCapture;
     int NDFileDeleteDriverFile;
     int NDFileLazyOpen;
     int NDFileCreateDir;
@@ -173,17 +176,17 @@ protected:
     int NDAttributesFile;
     int NDAttributesStatus;
     int NDAttributesMacros;
-    int NDArrayData;
     int NDArrayCallbacks;
     int NDPoolMaxBuffers;
     int NDPoolAllocBuffers;
     int NDPoolFreeBuffers;
     int NDPoolMaxMemory;
     int NDPoolUsedMemory;
+    NDArrayParamPtr NDArrayData;
 
-    NDArray **pArrays;             /**< An array of NDArray pointers used to store data in the driver */
-    NDArrayPool *pNDArrayPool;     /**< An NDArrayPool object used to allocate and manipulate NDArray objects */
-    class NDAttributeList *pAttributeList;  /**< An NDAttributeList object used to obtain the current values of a set of
+    std::vector<NDArray::const_shared_pointer> pArrays;  /**< An array of NDArray pointers used to store data in the driver */
+    NDArrayPool NDArrayPool_;         /**< An NDArrayPool object used to allocate and manipulate NDArray objects */
+    class NDAttributeList attributeList_;  /**< An NDAttributeList object used to obtain the current values of a set of
                                           *  attributes */
     int threadStackSize_;
     int threadPriority_;

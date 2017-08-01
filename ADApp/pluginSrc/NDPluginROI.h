@@ -38,12 +38,13 @@
   * The plugin also optionally computes a statistics on the ROI. */
 class epicsShareClass NDPluginROI : public NDPluginDriver {
 public:
-    NDPluginROI(const char *portName, int queueSize, int blockingCallbacks, 
-                 const char *NDArrayPort, int NDArrayAddr,
+    NDPluginROI(const char *portName, std::string const & pvName,
+                 int queueSize, int blockingCallbacks,
+                 std::string const & sourcePvName,
                  int maxBuffers, size_t maxMemory,
                  int priority, int stackSize, int maxThreads);
     /* These methods override the virtual methods in the base class */
-    void processCallbacks(NDArray *pArray);
+    void processCallbacks(NDArray::const_shared_pointer pArray);
     asynStatus writeInt32(asynUser *pasynUser, epicsInt32 value);
 
 protected:

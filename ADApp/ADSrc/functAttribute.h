@@ -23,7 +23,6 @@ public:
     functAttribute(const char *pName, const char *pDescription, const char *pSource, const char *pParam);
     functAttribute(functAttribute& attribute);
     ~functAttribute();
-    functAttribute* copy(NDAttribute *pAttribute);
     virtual int updateValue();
     int report(FILE *fp, int details);
 
