@@ -23,6 +23,7 @@
 #include <asynDriver.h>
 
 #include <pv/clientFactory.h>
+#include <pv/channelProviderLocal.h>
 
 #include <epicsExport.h>
 #include "NDPluginDriver.h"
@@ -157,7 +158,9 @@ NDPluginDriver::NDPluginDriver(const char *portName, string const & pvName, int 
 
     // Start pvAccess client factory
     ClientFactory::start();
-    provider_ = ChannelProviderRegistry::clients()->getProvider("pva");
+
+    //provider_ = ChannelProviderRegistry::clients()->getProvider("pva");
+    provider_ = getChannelProviderLocal();
 
     /* Create the callback threads, unless blocking callbacks are disabled with
      * the blockingCallbacks argument here. Even then, if they are enabled
